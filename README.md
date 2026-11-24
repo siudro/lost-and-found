@@ -33,6 +33,7 @@ No pipeline has been run. Nothing here produces a result yet. The only executabl
 schemas/    JSON Schema for every record in the pipeline
 fixtures/   a valid example of each contract (staged demo data)
 docs/       the interface contract and the reasoning behind it
+tools/      dataset access checks
 tests/      contract validation, and tests that the rules reject bad data
 ```
 
