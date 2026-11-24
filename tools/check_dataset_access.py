@@ -15,6 +15,9 @@ import urllib.error
 import urllib.request
 
 SOURCES = {
+    "CAVIAR index (best find, CC BY-SA)": "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1/",
+    "CAVIAR LeftBag_AtChair (verified)": "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1/LeftBag_AtChair/LeftBag_AtChair.mpg",
+    "CAVIAR LeftBag_PickedUp (verified)": "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1/LeftBag_PickedUp/LeftBag_PickedUp.mpg",
     "UniData HF mirror (usable)": "https://huggingface.co/api/datasets/UniDataPro/abandoned-object-detection-video",
     "UniData first clip (usable)": "https://huggingface.co/datasets/UniDataPro/abandoned-object-detection-video/resolve/main/left-behined_item_0001.mp4",
     "Kaggle listing (paid preview)": "https://www.kaggle.com/datasets/unidpro/abandoned-object-detection-video-dataset",

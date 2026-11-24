@@ -6,12 +6,45 @@ The project needs fixed-camera indoor video showing an item (especially a **jack
 
 ## Verdict up front
 
-**No public dataset in this search contains labelled jacket-left-behind footage in a school setting.** The closest public data shows cups, bags and luggage abandoned outdoors or in stations. That is enough to build and test the *unattended logic*, which is the hard part, but not enough to claim jacket performance.
+**No public dataset contains labelled jacket-left-behind footage in a school setting.** Nothing found in either sweep changes that.
 
-So the plan is two-track:
+But the second sweep found something much better than the first: **CAVIAR** — indoor, annotated, and licensed CC BY-SA so it can legally ship. See Tier 0.
 
-1. **Public data** proves the pipeline works on real abandonment footage — bags, cups, luggage.
-2. **A staged jacket shoot** (WAI-267) supplies the garment-specific evaluation and the demo clips. This is not optional; without it we cannot honestly report jacket recall.
+The plan is two-track:
+
+1. **CAVIAR proves the unattended logic** with real frame-level ground truth, and its CC BY-SA licence means clips can appear in the public demo.
+2. **A staged jacket shoot** (WAI-267) supplies the garment-specific evaluation and the high-resolution demo footage. Still not optional — CAVIAR's objects are bags, and 384×288 cannot show a jacket's colour or hood.
+
+## Tier 0 — the one we should actually build on: CAVIAR
+
+Found on a second, wider sweep. This is a genuine upgrade on everything above, and it changes the recommendation.
+
+- **URL:** https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1/
+- **Status:** **live and fully downloadable.** HTTP 200, plain MPEG2 files, no login, no payment, no gate.
+- **What it is:** the EC-funded CAVIAR project's scenario clips, filmed in two indoor locations:
+  - the entrance lobby of the **INRIA labs in Grenoble** (wide-angle security camera)
+  - a **shopping centre hallway in Lisbon**
+- **Relevant clips, verified downloaded and opened:**
+  - `LeftBag` — a bag left by a wall
+  - `LeftBag_AtChair` — a bag left **at chairs**, then the person walks away
+  - `LeftBag_BehindChair` — a bag left behind chairs, partly occluded
+  - `LeftBag_PickedUp` — a bag left **and then collected again**
+- **Size:** 13–17 MB each, 43–58 seconds, 384×288, 25 fps, MPEG2
+- **Labels:** real **frame-level XML ground truth** (`lb1gt.xml`, `lb2gt.xml`, ...), hand-annotated, with per-object boxes, roles (`walker`), movement (`inactive`) and situations. Verified by opening `lb2gt.xml`.
+- **Licence:** **Creative Commons BY-SA.** The project page states this directly and asks that published results acknowledge *EC Funded CAVIAR project/IST 2001 37540*.
+- **What it can test:** every one of our unattended states, with ground truth to score against.
+
+**Why this matters so much:** it is the first source found that is *indoor*, *has people leaving items near seating*, *has the "collected again" case*, *has real annotations*, **and** is licence-compatible with a public demo. CC BY-SA permits redistribution provided we credit CAVIAR and share derivatives under the same terms — nothing like the ND problem above.
+
+**Its limits, stated honestly:**
+- **384×288** is very low resolution. A jacket at that size is a handful of pixels. This is a test of *behaviour*, not of *appearance*.
+- **2003-era** MPEG2 footage. Video quality matters to a 2026 audience.
+- The objects are **bags and boxes, not garments.**
+- Camera is wide-angle and high up; our target setting is closer to eye level.
+
+So: **CAVIAR is the evaluation backbone. It is not the demo.** Build the unattended logic and score it here with real labels; ship the demo on staged footage shot on a phone.
+
+---
 
 ## Tier 1 — usable now, verified download
 
