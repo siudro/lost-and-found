@@ -1,0 +1,118 @@
+[
+  {
+    "observation_id": "obs_jacket_gray_unattended",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "track_ref": "track_run_demo_001#17",
+    "first_frame_offset_s": 540.0,
+    "last_frame_offset_s": 1740.0,
+    "first_seen_at": "2026-11-20T06:09:00Z",
+    "is_worn": false,
+    "state": "likely_unattended",
+    "unattended_onset_estimate": "2026-11-20T06:10:20Z",
+    "onset_certainty": "observed",
+    "confirmed_at": "2026-11-20T06:19:00Z",
+    "confidence": 0.82,
+    "uncertainty": [
+      "ambiguous_attributes"
+    ],
+    "attributes": {
+      "item_type": "jacket",
+      "primary_color": "gray",
+      "secondary_color": "navy",
+      "visible_features": [
+        "hood",
+        "zipper"
+      ],
+      "location_label": "draped over a chair by the window"
+    },
+    "caption_text": "A gray hooded jacket with a front zipper is draped over a chair beside the window.",
+    "caption_version": "captioner_v1"
+  },
+  {
+    "observation_id": "obs_jacket_gray_attended",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "track_ref": "track_run_demo_001#41",
+    "first_frame_offset_s": 1200.0,
+    "last_frame_offset_s": 2760.0,
+    "first_seen_at": "2026-11-20T06:20:00Z",
+    "is_worn": false,
+    "state": "stationary",
+    "unattended_onset_estimate": null,
+    "onset_certainty": "not_applicable",
+    "confirmed_at": null,
+    "confidence": 0.77,
+    "uncertainty": [
+      "identical_items_in_frame"
+    ],
+    "attributes": {
+      "item_type": "jacket",
+      "primary_color": "gray",
+      "secondary_color": null,
+      "visible_features": [
+        "hood"
+      ],
+      "location_label": "on the back of a chair at the front of the room, wearer seated beside it"
+    },
+    "caption_text": "A similar gray hooded jacket rests on a chair back while a person remains seated next to it.",
+    "caption_version": "captioner_v1"
+  },
+  {
+    "observation_id": "obs_jacket_worn",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "track_ref": "track_run_demo_001#63",
+    "first_frame_offset_s": 1800.0,
+    "last_frame_offset_s": 2400.0,
+    "first_seen_at": "2026-11-20T06:30:00Z",
+    "is_worn": true,
+    "state": "seen",
+    "unattended_onset_estimate": null,
+    "onset_certainty": "not_applicable",
+    "confirmed_at": null,
+    "confidence": 0.88,
+    "uncertainty": [],
+    "attributes": {
+      "item_type": "jacket",
+      "primary_color": "black",
+      "secondary_color": null,
+      "visible_features": [
+        "zipper"
+      ],
+      "location_label": "walking toward the door"
+    },
+    "caption_text": "A person wearing a black zip-up jacket walks toward the door.",
+    "caption_version": "captioner_v1"
+  },
+  {
+    "observation_id": "obs_backpack_blue_present_at_start",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "track_ref": "track_run_demo_001#2",
+    "first_frame_offset_s": 0.0,
+    "last_frame_offset_s": 900.0,
+    "first_seen_at": "2026-11-20T06:00:00Z",
+    "is_worn": false,
+    "state": "uncertain",
+    "unattended_onset_estimate": null,
+    "onset_certainty": "uncertain",
+    "confirmed_at": null,
+    "confidence": 0.79,
+    "uncertainty": [
+      "present_at_clip_start"
+    ],
+    "attributes": {
+      "item_type": "backpack",
+      "primary_color": "blue",
+      "secondary_color": null,
+      "visible_features": [
+        "zipper",
+        "pocket"
+      ],
+      "location_label": "leaning against the classroom door frame"
+    },
+    "caption_text": "A blue backpack leans against the door frame; it is already present in the first frame.",
+    "caption_version": "captioner_v1"
+  }
+]

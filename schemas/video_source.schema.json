@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lost-and-found/schemas/video_source.schema.json",
+  "title": "VideoSource",
+  "description": "One footage source in the archive: an uploaded recording, a configured live camera, or the replay fixture that drives the live path in demos. Every downstream record names the source and clock it came from, so a timestamp is never ambiguous.",
+  "type": "object",
+  "required": ["source_id", "camera_id", "kind", "clock", "timezone", "venue_id"],
+  "additionalProperties": false,
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "pattern": "^src_[a-z0-9_]+$",
+      "description": "Stable identifier for this footage source. Referenced by every observation, event, window and evidence record."
+    },
+    "camera_id": {
+      "type": "string",
+      "pattern": "^cam_[a-z0-9_]+$",
+      "description": "Physical camera or recording position. Two sources may share a camera_id (e.g. a recording and its live feed) and are then treated as the same viewpoint for search."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["recorded_upload", "live_feed", "replay"],
+      "description": "recorded_upload = a file uploaded by a human. live_feed = a configured RTSP/HTTP camera. replay = a sample file pushed through the live code path for demos, which must behave identically to live_feed everywhere downstream."
+    },
+    "clock": {
+      "type": "string",
+      "enum": ["source_clock", "ingestion_clock", "media_relative_only"],
+      "description": "Which clock produced the timestamps for this source. source_clock = timestamps came from the camera or container metadata and are trusted as absolute. ingestion_clock = timestamps were stamped when the feed was read, so they are absolute but late by the network and buffer delay. media_relative_only = no wall-clock anchor exists; only offsets from the start of the file are meaningful."
+    },
+    "timezone": {
+      "type": "string",
+      "description": "IANA timezone used to render and resolve local times for this source, e.g. Asia/Riyadh. Required so 'yesterday' and 'around 4 PM' resolve to the same instants the user means.",
+      "examples": ["Asia/Riyadh"]
+    },
+    "venue_id": {
+      "type": "string",
+      "pattern": "^venue_[a-z0-9_]+$",
+      "description": "Location the source belongs to. The chat scopes searches by venue before ranking."
+    },
+    "location_label": {
+      "type": ["string", "null"],
+      "description": "Human description of what this camera covers, e.g. 'Classroom 3 doorway'. Used in answers; never invented — null when unknown."
+    },
+    "recording_started_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Absolute UTC instant corresponding to media offset 0. Required for calendar questions ('yesterday morning') on recorded_upload sources; null when the file has no reliable anchor. Never guessed from file modification time."
+    },
+    "recording_ended_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Absolute UTC instant of the last frame, or null when unknown or the source is still live."
+    },
+    "media_path": {
+      "type": ["string", "null"],
+      "description": "Path or URI to the media, relative to the configured media root. Never a public URL for private footage."
+    },
+    "duration_seconds": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Media duration when known. Null for a live feed."
+    },
+    "fps_nominal": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "description": "Nominal frame rate from the container. Sampling decisions use this, not an assumed 30fps."
+    },
+    "resolution": {
+      "type": ["object", "null"],
+      "description": "Nominal frame size, used when scoring whether a model can see a jacket at all.",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "exclusiveMinimum": 0 },
+        "height": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "audio_present": {
+      "type": "boolean",
+      "default": false,
+      "description": "Audio is off by default for this project. Set true only for expressly approved clips, and note it in access notes."
+    },
+    "access": {
+      "type": "object",
+      "description": "Who may see this footage and its derived evidence. Enforced when serving clips and when returning search results.",
+      "additionalProperties": false,
+      "required": ["visibility"],
+      "properties": {
+        "visibility": {
+          "type": "string",
+          "enum": ["public_demo", "approved_private", "internal_only"],
+          "description": "public_demo = staged or expressly approved clip, safe to serve to judges. approved_private = real footage with a named approval on file; never served without an authorisation check. internal_only = working material, never served."
+        },
+        "approved_by": {
+          "type": ["string", "null"],
+          "description": "Who approved use of this footage. Null for public_demo fixtures and for internal_only material."
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When the footage must stop being retained and served. Null means no scheduled expiry."
+        }
+      }
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Free text: how to obtain the file, known occlusion, mounting quirks. Never a secret, stream credential or token."
+    }
+  }
+}

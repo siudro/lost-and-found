@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lost-and-found/schemas/evidence.schema.json",
+  "title": "Evidence",
+  "description": "A reference to the footage that supports one event, expressed as a seekable interval rather than a rendered file. Storing an interval plus the source means playback survives redeploys, and a clip whose footage is missing or expired is reported as unavailable instead of failing or being silently skipped.",
+  "type": "object",
+  "required": [
+    "evidence_id",
+    "event_id",
+    "source_id",
+    "camera_id",
+    "clip_start_offset_s",
+    "clip_end_offset_s",
+    "availability"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^evd_[a-z0-9_]+$",
+      "description": "Stable id, derived from the event it supports, so regenerating evidence does not orphan citations."
+    },
+    "event_id": { "type": "string", "pattern": "^evt_[a-z0-9_]+$" },
+    "source_id": { "type": "string", "pattern": "^src_[a-z0-9_]+$" },
+    "camera_id": { "type": "string", "pattern": "^cam_[a-z0-9_]+$" },
+    "clip_start_offset_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Start of the excerpt, media-relative. The excerpt is roughly one minute centred on the event, clamped to the source bounds."
+    },
+    "clip_end_offset_s": { "type": "number", "minimum": 0 },
+    "clip_start_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Absolute UTC start of the excerpt when a wall clock exists."
+    },
+    "clip_end_at": { "type": ["string", "null"], "format": "date-time" },
+    "window_id": {
+      "type": "string",
+      "pattern": "^win_[A-Za-z0-9_]+$",
+      "description": "The surrounding 10-minute window, offered as a wider view when the footage is authorised for it."
+    },
+    "seek_to_offset_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Exactly where the player should start when it opens the source: the event moment itself, not the start of the excerpt. Tests assert the seek lands on the event."
+    },
+    "player_ref": {
+      "type": "string",
+      "description": "Opaque reference the app resolves to a player URL, e.g. 'player:src_demo_classroom?t=1830'. Kept opaque so the storage layout can change without rewriting stored records."
+    },
+    "availability": {
+      "type": "string",
+      "enum": ["available", "footage_expired", "footage_missing", "access_denied"],
+      "description": "Current state of the underlying footage. Anything other than available must surface to the user in words — the chat may cite the observation but must say the clip cannot be shown and why."
+    },
+    "retention": {
+      "type": "object",
+      "description": "How long this excerpt may be retained and served. Once expired, availability becomes footage_expired rather than the record disappearing.",
+      "additionalProperties": false,
+      "properties": {
+        "retain_until": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

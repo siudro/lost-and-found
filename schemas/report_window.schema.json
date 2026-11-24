@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lost-and-found/schemas/report_window.schema.json",
+  "title": "ReportWindow",
+  "description": "The structured record for one 10-minute report window on one source. Carries the scene summary, the item events recorded inside it, and — critically — the coverage: what the camera actually saw. Coverage is a first-class part of the record because a 'no match' answer is only honest if the system knows which footage was checked and which was missing.",
+  "type": "object",
+  "required": [
+    "window_id",
+    "source_id",
+    "camera_id",
+    "window_start",
+    "window_end",
+    "report_id",
+    "coverage",
+    "scene_summary",
+    "event_ids",
+    "processing"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "window_id": {
+      "type": "string",
+      "pattern": "^win_[A-Za-z0-9_]+$",
+      "description": "Stable identifier derived from source and start instant, so reprocessing a window overwrites rather than duplicates."
+    },
+    "source_id": { "type": "string", "pattern": "^src_[a-z0-9_]+$" },
+    "camera_id": { "type": "string", "pattern": "^cam_[a-z0-9_]+$" },
+    "window_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Absolute UTC start. Windows tile the footage in fixed 10-minute blocks aligned to the source's start, so they roll over deterministically at the hour."
+    },
+    "window_end": { "type": "string", "format": "date-time" },
+    "window_start_offset_s": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Media-relative offset of window_start, for playback on sources without a wall clock."
+    },
+    "report_id": {
+      "type": "string",
+      "pattern": "^rep_[A-Za-z0-9_]+$",
+      "description": "The grouped report this window was rolled into (hourly by default, configurable, subject to a size limit)."
+    },
+    "report_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Venue-local date the report is filed under, e.g. '2026-11-20'. Organising by local date is what makes 'yesterday' answers correct."
+    },
+    "coverage": {
+      "type": "object",
+      "description": "What the camera actually captured in this window. Every gap is named, because an answer must be able to say 'no match in the footage checked' and separately 'the camera was offline from 14:20 to 14:50'.",
+      "additionalProperties": false,
+      "required": ["status", "observed_seconds", "expected_seconds", "gaps"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["full", "partial", "none"],
+          "description": "full = the whole window was processed with no significant gap. partial = some footage missing or unprocessed. none = no footage available for this window at all; the record exists precisely to represent that."
+        },
+        "observed_seconds": { "type": "number", "minimum": 0 },
+        "expected_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "gaps": {
+          "type": "array",
+          "description": "Each uncovered interval. Empty only when status is full.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end", "reason"],
+            "properties": {
+              "start": { "type": "string", "format": "date-time" },
+              "end": { "type": "string", "format": "date-time" },
+              "reason": {
+                "type": "string",
+                "enum": ["camera_offline", "frames_missing", "not_yet_processed", "footage_expired", "access_denied"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scene_summary": {
+      "type": "object",
+      "description": "A separately labelled natural-language description of the window, so the chat can answer scene-level questions ('what happened near the entrance around 4 PM?') without inventing anything from item events alone.",
+      "additionalProperties": false,
+      "required": ["text", "caption_version"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "What happens in this window. Descriptive only: no identities, no ownership, no claims about items outside the frame."
+        },
+        "caption_version": { "type": "string" }
+      }
+    },
+    "event_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^evt_[a-z0-9_]+$" },
+      "uniqueItems": true,
+      "description": "Item events recorded in this window. Ids only — the event records themselves are stored separately so the chat can search across windows without loading whole reports."
+    },
+    "observation_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^obs_[a-z0-9_]+$" },
+      "uniqueItems": true
+    },
+    "sampling": {
+      "type": "object",
+      "description": "How densely this window was sampled. Base sampling is deliberately low; candidate intervals get denser sampling, and the record must show which was used so speed and recall claims are reproducible.",
+      "additionalProperties": false,
+      "required": ["base_interval_s"],
+      "properties": {
+        "base_interval_s": { "type": "number", "exclusiveMinimum": 0 },
+        "dense_interval_s": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "dense_intervals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "type": "string", "format": "date-time" },
+              "end": { "type": "string", "format": "date-time" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "processing": {
+      "type": "object",
+      "description": "Provenance of the run that produced this window. Recorded so a reviewer can tell which model and config supports any claim, and so repeat runs can be deduplicated.",
+      "additionalProperties": false,
+      "required": ["pipeline_version", "content_hash", "processed_at"],
+      "properties": {
+        "pipeline_version": { "type": "string" },
+        "detector": { "type": ["string", "null"] },
+        "segmenter": { "type": ["string", "null"] },
+        "captioner": { "type": ["string", "null"] },
+        "content_hash": {
+          "type": "string",
+          "description": "Hash of the source interval plus config. Identical hash means identical result, which is how retries deduplicate instead of double-counting."
+        },
+        "processed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "hourly_grouping": {
+      "type": "object",
+      "description": "Where this window fell in the configured grouping, including the rollover that matters for the hourly report boundary.",
+      "additionalProperties": false,
+      "properties": {
+        "group_size_minutes": { "type": "integer", "exclusiveMinimum": 0, "default": 60 },
+        "group_index": { "type": "integer", "minimum": 0 },
+        "rolled_over": { "type": "boolean", "description": "True when this window opened a new group, e.g. the first window after the hour." }
+      }
+    }
+  }
+}

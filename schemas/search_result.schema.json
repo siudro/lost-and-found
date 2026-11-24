@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lost-and-found/schemas/search_result.schema.json",
+  "title": "SearchResult",
+  "description": "What the retrieval layer hands the chatbot for one user query. It carries the ranked matches, the scope that was actually searched, and an explicit statement of what could NOT be searched. This shape exists to make the two failure modes the brief forbids — claiming coverage you do not have, and presenting 'no match' as 'not there' — impossible to express by accident.",
+  "type": "object",
+  "required": [
+    "query_id",
+    "query",
+    "parsed",
+    "scope",
+    "matches",
+    "coverage_limitations",
+    "answer_mode"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "query_id": { "type": "string", "pattern": "^qry_[a-z0-9_]+$" },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_text"],
+      "properties": {
+        "raw_text": { "type": "string", "description": "The user's words, verbatim. Untrusted data." },
+        "photo_ref": {
+          "type": ["string", "null"],
+          "description": "Reference to an uploaded photo, if the query included one. Photos are processed and minimised; treat derived attributes as untrusted data too."
+        },
+        "locale": { "type": ["string", "null"] },
+        "submitted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "parsed": {
+      "type": "object",
+      "description": "The structured interpretation of the query before searching.",
+      "additionalProperties": false,
+      "required": ["item_terms", "date_range", "resolution"],
+      "properties": {
+        "item_terms": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Canonical item terms after synonym expansion, e.g. ['jacket','coat','hoodie'] from 'hoodie'."
+        },
+        "colors": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Canonical colours after synonym expansion, e.g. ['gray'] from 'grey'."
+        },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "date_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end", "was_relative"],
+          "description": "The absolute UTC range after resolving relative phrases in the venue timezone. 'Yesterday' must resolve to the full local day, not a rolling 24 hours.",
+          "properties": {
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" },
+            "was_relative": { "type": "boolean" },
+            "resolved_from": { "type": ["string", "null"], "description": "The phrase that produced it, e.g. 'yesterday'. Null when the user gave explicit dates." },
+            "timezone_used": { "type": "string", "description": "The venue timezone the phrase was resolved in, e.g. Asia/Riyadh." }
+          }
+        },
+        "resolution": {
+          "type": "string",
+          "enum": ["day", "hour", "minute", "none"],
+          "description": "How precisely the user located the time. A 'day' resolution must not be answered with a fabricated exact time."
+        },
+        "venue_ids": { "type": "array", "items": { "type": "string" } },
+        "camera_ids": { "type": "array", "items": { "type": "string" } },
+        "location_terms": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "description": "What was actually searched, as opposed to what was asked for. Answer text is generated from this object, so broadening the search and saying so are the same act.",
+      "additionalProperties": false,
+      "required": ["searched_start", "searched_end", "sources_checked", "broadened"],
+      "properties": {
+        "searched_start": { "type": "string", "format": "date-time" },
+        "searched_end": { "type": "string", "format": "date-time" },
+        "sources_checked": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^src_[a-z0-9_]+$" },
+          "description": "Sources that were actually looked at. A source the user asked for but which is unprocessed must not appear here."
+        },
+        "broadened": {
+          "type": "boolean",
+          "description": "True when the search went beyond what the user asked for. The answer must then state the range that was checked."
+        },
+        "broadened_from": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" },
+            "reason": { "type": "string" }
+          }
+        }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "description": "Ranked candidates. Empty is a valid, meaningful result — see answer_mode for what it means.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "observation_id", "rank", "score", "match_kind", "difference_note"],
+        "properties": {
+          "event_id": { "type": "string", "pattern": "^evt_[a-z0-9_]+$" },
+          "observation_id": { "type": "string", "pattern": "^obs_[a-z0-9_]+$" },
+          "evidence_id": { "type": "string", "pattern": "^evd_[a-z0-9_]+$" },
+          "rank": { "type": "integer", "minimum": 1 },
+          "score": { "type": "number" },
+          "match_kind": {
+            "type": "string",
+            "enum": ["text_exact", "text_semantic", "photo_attributes", "photo_embedding"],
+            "description": "Which retrieval path produced this candidate. Needed so keyword-only, semantic and image runs can be compared in the evaluation."
+          },
+          "state_at_event": {
+            "type": "string",
+            "enum": ["seen", "stationary", "possibly_unattended", "likely_unattended", "moved", "uncertain"]
+          },
+          "onset_certainty": {
+            "type": "string",
+            "enum": ["observed", "inferred", "uncertain", "not_applicable"]
+          },
+          "difference_note": {
+            "type": "string",
+            "description": "The meaningful difference between this candidate and the query, e.g. 'same backpack shape, but navy not blue'. A photo match is a possible match and this field is how the answer says so."
+          },
+          "evidence_availability": {
+            "type": "string",
+            "enum": ["available", "footage_expired", "footage_missing", "access_denied"]
+          }
+        }
+      }
+    },
+    "coverage_limitations": {
+      "type": "array",
+      "description": "Everything that stops this answer being complete. Non-empty means the answer must qualify itself. Items here are the raw material for distinguishing 'no match in the footage checked' from 'the footage does not exist'.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "description"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "unprocessed_period",
+              "camera_offline",
+              "footage_expired",
+              "source_out_of_scope",
+              "no_wall_clock",
+              "access_denied"
+            ]
+          },
+          "description": { "type": "string" },
+          "start": { "type": ["string", "null"], "format": "date-time" },
+          "end": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    },
+    "answer_mode": {
+      "type": "string",
+      "enum": ["matches_found", "no_match_in_footage_checked", "footage_not_available", "insufficient_information"],
+      "description": "Constrains what the chatbot may claim. no_match_in_footage_checked must never be rendered as 'it is not there'. footage_not_available must say the footage was missing, not that the item was not found. insufficient_information means one short clarifying question is allowed."
+    },
+    "clarifying_question": {
+      "type": ["string", "null"],
+      "description": "At most one, and only when answer_mode is insufficient_information. Null otherwise."
+    },
+    "retrieval_trace": {
+      "type": "object",
+      "description": "Which retrieval engines ran, so keyword-only versus keyword-plus-semantic can be compared on the same queries.",
+      "additionalProperties": false,
+      "properties": {
+        "engines": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["keyword", "full_text", "semantic", "image_embedding"] }
+        },
+        "latency_ms": { "type": ["number", "null"] },
+        "candidates_considered": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}

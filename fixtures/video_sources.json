@@ -1,0 +1,22 @@
+{
+  "source_id": "src_demo_classroom",
+  "camera_id": "cam_classroom_3",
+  "kind": "replay",
+  "clock": "source_clock",
+  "timezone": "Asia/Riyadh",
+  "venue_id": "venue_school_demo",
+  "location_label": "Demo classroom 3, doorway end",
+  "recording_started_at": "2026-11-20T06:00:00Z",
+  "recording_ended_at": "2026-11-20T07:00:00Z",
+  "media_path": "fixtures/media/staged_classroom_60min.mp4",
+  "duration_seconds": 3600,
+  "fps_nominal": 25,
+  "resolution": { "width": 1280, "height": 720 },
+  "audio_present": false,
+  "access": {
+    "visibility": "public_demo",
+    "approved_by": null,
+    "expires_at": null
+  },
+  "notes": "Staged clip shot with consenting adults. Safe for the public demo. No real students appear in this footage."
+}

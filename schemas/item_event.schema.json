@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lost-and-found/schemas/item_event.schema.json",
+  "title": "ItemEvent",
+  "description": "A dated change in an item's situation: it appeared, was placed, became unattended, moved, was picked up, or was seen being carried while worn. Events are the units the chat cites and links to. ItemEvent deliberately cannot express a staff handover — that requires an intake record and lives in a separate collection, so no pipeline output can accidentally claim a handover.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "observation_id",
+    "source_id",
+    "camera_id",
+    "event_time_offset_s",
+    "window_id",
+    "evidence_id",
+    "state_at_event"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[a-z0-9_]+$",
+      "description": "Stable, content-derived identifier. The same physical event reprocessed in an overlapping window must yield the same event_id so retries cannot duplicate it."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "first_observed",
+        "placed",
+        "became_stationary",
+        "unattended_onset_estimated",
+        "unattended_confirmed",
+        "moved",
+        "picked_up",
+        "worn_seen",
+        "left_frame",
+        "reappeared"
+      ],
+      "description": "first_observed = earliest sighting in available footage (NOT proof the item arrived then). unattended_onset_estimated = the estimate, which may be marked uncertain. unattended_confirmed = the system's threshold crossing, which lags the onset. worn_seen = the item was on a person and is not a candidate for loss."
+    },
+    "observation_id": { "type": "string", "pattern": "^obs_[a-z0-9_]+$" },
+    "source_id": { "type": "string", "pattern": "^src_[a-z0-9_]+$" },
+    "camera_id": { "type": "string", "pattern": "^cam_[a-z0-9_]+$" },
+    "event_time_offset_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Media-relative offset of the event. This is what playback seeks to."
+    },
+    "event_time": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Absolute UTC instant, when the source has a wall-clock anchor. Null otherwise; the chat then reports an offset, not an invented clock time."
+    },
+    "window_id": {
+      "type": "string",
+      "pattern": "^win_[A-Za-z0-9_]+$",
+      "description": "The 10-minute report window this event was recorded in. Required so every event resolves to a report."
+    },
+    "report_id": {
+      "type": "string",
+      "pattern": "^rep_[A-Za-z0-9_]+$",
+      "description": "The grouped report (hourly by default) that contained the window at write time. Informational; the window_id is authoritative."
+    },
+    "state_at_event": {
+      "type": "string",
+      "enum": [
+        "seen",
+        "stationary",
+        "possibly_unattended",
+        "likely_unattended",
+        "moved",
+        "uncertain"
+      ]
+    },
+    "onset_certainty": {
+      "type": "string",
+      "enum": ["observed", "inferred", "uncertain", "not_applicable"],
+      "description": "Repeated here so a single event can be scored without loading its observation. 'uncertain' is required when the item was already present at clip start."
+    },
+    "uncertainty": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "occluded",
+          "present_at_clip_start",
+          "coverage_gap",
+          "low_resolution",
+          "ambiguous_attributes",
+          "identical_items_in_frame",
+          "track_fragmented",
+          "detector_below_threshold"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "Uncertainty inherited from the observation plus anything specific to this event."
+    },
+    "confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^evd_[a-z0-9_]+$",
+      "description": "Reference to the evidence record for this event. Required: an event with no evidence cannot be cited in an answer."
+    },
+    "is_worn": {
+      "type": "boolean",
+      "description": "Inherited from the observation. True events of type worn_seen are never loss candidates."
+    },
+    "note": {
+      "type": ["string", "null"],
+      "description": "Short factual context for the answer, e.g. 'a person sat down, then left'. Must not state ownership or identity."
+    }
+  }
+}

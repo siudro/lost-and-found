@@ -1,0 +1,236 @@
+[
+  {
+    "query_id": "qry_gray_jacket_yesterday",
+    "query": {
+      "raw_text": "Have you seen a gray jacket? I lost it yesterday.",
+      "photo_ref": null,
+      "locale": "en",
+      "submitted_at": "2026-11-21T09:15:00Z"
+    },
+    "parsed": {
+      "item_terms": ["jacket", "coat", "hoodie"],
+      "colors": ["gray", "grey"],
+      "features": [],
+      "date_range": {
+        "start": "2026-11-20T00:00:00+03:00",
+        "end": "2026-11-20T23:59:59+03:00",
+        "was_relative": true,
+        "resolved_from": "yesterday",
+        "timezone_used": "Asia/Riyadh"
+      },
+      "resolution": "day",
+      "venue_ids": ["venue_school_demo"],
+      "camera_ids": [],
+      "location_terms": []
+    },
+    "scope": {
+      "searched_start": "2026-11-20T00:00:00+03:00",
+      "searched_end": "2026-11-20T23:59:59+03:00",
+      "sources_checked": ["src_demo_classroom"],
+      "broadened": false,
+      "broadened_from": null
+    },
+    "matches": [
+      {
+        "event_id": "evt_jacket_gray_unattended_confirmed",
+        "observation_id": "obs_jacket_gray_unattended",
+        "evidence_id": "evd_jacket_gray_unattended_confirmed",
+        "rank": 1,
+        "score": 0.91,
+        "match_kind": "text_exact",
+        "state_at_event": "likely_unattended",
+        "onset_certainty": "observed",
+        "difference_note": "Matches on type and colour; the footage shows it left on a chair, not recovered.",
+        "evidence_availability": "available"
+      },
+      {
+        "event_id": "evt_jacket_gray_placed",
+        "observation_id": "obs_jacket_gray_unattended",
+        "evidence_id": "evd_jacket_gray_placed",
+        "rank": 2,
+        "score": 0.74,
+        "match_kind": "text_exact",
+        "state_at_event": "seen",
+        "onset_certainty": "not_applicable",
+        "difference_note": "The same jacket moments after being set down; earlier evidence for the same track.",
+        "evidence_availability": "available"
+      }
+    ],
+    "coverage_limitations": [
+      {
+        "kind": "camera_offline",
+        "description": "Recording was interrupted between 14:14 and 14:17 local time.",
+        "start": "2026-11-20T06:14:00Z",
+        "end": "2026-11-20T06:17:00Z"
+      }
+    ],
+    "answer_mode": "matches_found",
+    "clarifying_question": null,
+    "retrieval_trace": {
+      "engines": ["keyword", "semantic"],
+      "latency_ms": 212,
+      "candidates_considered": 4
+    }
+  },
+  {
+    "query_id": "qry_photo_blue_backpack",
+    "query": {
+      "raw_text": "Can you find this?",
+      "photo_ref": "upload_20261121_0930",
+      "locale": "en",
+      "submitted_at": "2026-11-21T09:30:00Z"
+    },
+    "parsed": {
+      "item_terms": ["backpack", "bag"],
+      "colors": ["blue", "navy"],
+      "features": ["zipper"],
+      "date_range": {
+        "start": "2026-11-20T00:00:00+03:00",
+        "end": "2026-11-20T23:59:59+03:00",
+        "was_relative": true,
+        "resolved_from": "photo query scoped to yesterday",
+        "timezone_used": "Asia/Riyadh"
+      },
+      "resolution": "day",
+      "venue_ids": ["venue_school_demo"],
+      "camera_ids": [],
+      "location_terms": []
+    },
+    "scope": {
+      "searched_start": "2026-11-20T00:00:00+03:00",
+      "searched_end": "2026-11-20T23:59:59+03:00",
+      "sources_checked": ["src_demo_classroom"],
+      "broadened": false,
+      "broadened_from": null
+    },
+    "matches": [
+      {
+        "event_id": "evt_backpack_blue_present_at_start",
+        "observation_id": "obs_backpack_blue_present_at_start",
+        "evidence_id": "evd_backpack_blue_present_at_start",
+        "rank": 1,
+        "score": 0.68,
+        "match_kind": "photo_attributes",
+        "state_at_event": "uncertain",
+        "onset_certainty": "uncertain",
+        "difference_note": "Similar shape and colour. The backpack was already by the door when recording began, so when it arrived is unknown.",
+        "evidence_availability": "available"
+      }
+    ],
+    "coverage_limitations": [
+      {
+        "kind": "no_wall_clock",
+        "description": "Before the first frame, the backpack's history is unknown.",
+        "start": null,
+        "end": null
+      }
+    ],
+    "answer_mode": "matches_found",
+    "clarifying_question": null,
+    "retrieval_trace": {
+      "engines": ["image_embedding", "keyword"],
+      "latency_ms": 388,
+      "candidates_considered": 4
+    }
+  },
+  {
+    "query_id": "qry_red_umbrella_unprocessed",
+    "query": {
+      "raw_text": "Did anyone leave a red umbrella in the gym this morning?",
+      "photo_ref": null,
+      "locale": "en",
+      "submitted_at": "2026-11-21T08:05:00Z"
+    },
+    "parsed": {
+      "item_terms": ["umbrella"],
+      "colors": ["red"],
+      "features": [],
+      "date_range": {
+        "start": "2026-11-21T00:00:00+03:00",
+        "end": "2026-11-21T12:00:00+03:00",
+        "was_relative": true,
+        "resolved_from": "this morning",
+        "timezone_used": "Asia/Riyadh"
+      },
+      "resolution": "hour",
+      "venue_ids": ["venue_school_demo"],
+      "camera_ids": ["cam_gym_1"],
+      "location_terms": ["gym"]
+    },
+    "scope": {
+      "searched_start": "2026-11-21T00:00:00+03:00",
+      "searched_end": "2026-11-21T12:00:00+03:00",
+      "sources_checked": [],
+      "broadened": false,
+      "broadened_from": null
+    },
+    "matches": [],
+    "coverage_limitations": [
+      {
+        "kind": "unprocessed_period",
+        "description": "No footage from the gym has been processed for today yet; nothing was searchable.",
+        "start": "2026-11-21T00:00:00+03:00",
+        "end": "2026-11-21T12:00:00+03:00"
+      }
+    ],
+    "answer_mode": "footage_not_available",
+    "clarifying_question": null,
+    "retrieval_trace": {
+      "engines": ["keyword"],
+      "latency_ms": 12,
+      "candidates_considered": 0
+    }
+  },
+  {
+    "query_id": "qry_scene_entrance_4pm",
+    "query": {
+      "raw_text": "What happened near the entrance around 4 PM yesterday?",
+      "photo_ref": null,
+      "locale": "en",
+      "submitted_at": "2026-11-21T10:02:00Z"
+    },
+    "parsed": {
+      "item_terms": [],
+      "colors": [],
+      "features": [],
+      "date_range": {
+        "start": "2026-11-20T15:45:00+03:00",
+        "end": "2026-11-20T16:15:00+03:00",
+        "was_relative": true,
+        "resolved_from": "4 PM yesterday",
+        "timezone_used": "Asia/Riyadh"
+      },
+      "resolution": "minute",
+      "venue_ids": ["venue_school_demo"],
+      "camera_ids": [],
+      "location_terms": ["entrance"]
+    },
+    "scope": {
+      "searched_start": "2026-11-20T09:00:00+03:00",
+      "searched_end": "2026-11-20T10:00:00+03:00",
+      "sources_checked": ["src_demo_classroom"],
+      "broadened": true,
+      "broadened_from": {
+        "start": "2026-11-20T15:45:00+03:00",
+        "end": "2026-11-20T16:15:00+03:00",
+        "reason": "the staged demo recording covers 09:00-10:00 local only, so the available window was searched and the shift is stated to the user"
+      }
+    },
+    "matches": [],
+    "coverage_limitations": [
+      {
+        "kind": "source_out_of_scope",
+        "description": "No camera covering the entrance recorded between 15:45 and 16:15 local time.",
+        "start": "2026-11-20T15:45:00+03:00",
+        "end": "2026-11-20T16:15:00+03:00"
+      }
+    ],
+    "answer_mode": "no_match_in_footage_checked",
+    "clarifying_question": null,
+    "retrieval_trace": {
+      "engines": ["keyword", "semantic"],
+      "latency_ms": 96,
+      "candidates_considered": 3
+    }
+  }
+]

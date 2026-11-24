@@ -1,0 +1,149 @@
+[
+  {
+    "window_id": "win_src_demo_classroom_20261120T060000Z",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "window_start": "2026-11-20T06:00:00Z",
+    "window_end": "2026-11-20T06:10:00Z",
+    "window_start_offset_s": 0.0,
+    "report_id": "rep_src_demo_classroom_20261120T0600Z",
+    "report_date": "2026-11-20",
+    "coverage": {
+      "status": "full",
+      "observed_seconds": 600,
+      "expected_seconds": 600,
+      "gaps": []
+    },
+    "scene_summary": {
+      "text": "Students move between desks at the start of a lesson. A gray hooded jacket is placed on a chair by the window and left there; a person sits beside a similar gray jacket at the front. A blue backpack rests by the door frame throughout, already present when recording began.",
+      "caption_version": "captioner_v1"
+    },
+    "event_ids": [
+      "evt_backpack_blue_present_at_start",
+      "evt_jacket_gray_placed",
+      "evt_jacket_gray_unattended_onset"
+    ],
+    "observation_ids": [
+      "obs_backpack_blue_present_at_start",
+      "obs_jacket_gray_attended",
+      "obs_jacket_gray_unattended"
+    ],
+    "sampling": {
+      "base_interval_s": 15,
+      "dense_interval_s": 2,
+      "dense_intervals": [
+        { "start": "2026-11-20T06:08:00Z", "end": "2026-11-20T06:11:00Z", "reason": "candidate placement" }
+      ]
+    },
+    "processing": {
+      "pipeline_version": "demo_v1",
+      "detector": "open_vocab_detector_v0",
+      "segmenter": "sam_backed_selector_v0",
+      "captioner": "captioner_v1",
+      "content_hash": "sha256:demo-window-0600",
+      "processed_at": "2026-11-20T08:12:00Z"
+    },
+    "hourly_grouping": {
+      "group_size_minutes": 60,
+      "group_index": 0,
+      "rolled_over": true
+    }
+  },
+  {
+    "window_id": "win_src_demo_classroom_20261120T061000Z",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "window_start": "2026-11-20T06:10:00Z",
+    "window_end": "2026-11-20T06:20:00Z",
+    "window_start_offset_s": 600.0,
+    "report_id": "rep_src_demo_classroom_20261120T0600Z",
+    "report_date": "2026-11-20",
+    "coverage": {
+      "status": "partial",
+      "observed_seconds": 420,
+      "expected_seconds": 600,
+      "gaps": [
+        {
+          "start": "2026-11-20T06:14:00Z",
+          "end": "2026-11-20T06:17:00Z",
+          "reason": "camera_offline"
+        }
+      ]
+    },
+    "scene_summary": {
+      "text": "The lesson continues with the gray jacket on the chair unattended and the similar jacket at the front still attended. Recording stops between 14:14 and 14:17 local time.",
+      "caption_version": "captioner_v1"
+    },
+    "event_ids": [
+      "evt_jacket_gray_unattended_confirmed"
+    ],
+    "observation_ids": [
+      "obs_jacket_gray_attended",
+      "obs_jacket_gray_unattended"
+    ],
+    "sampling": {
+      "base_interval_s": 15,
+      "dense_interval_s": null,
+      "dense_intervals": []
+    },
+    "processing": {
+      "pipeline_version": "demo_v1",
+      "detector": "open_vocab_detector_v0",
+      "segmenter": "sam_backed_selector_v0",
+      "captioner": "captioner_v1",
+      "content_hash": "sha256:demo-window-0610",
+      "processed_at": "2026-11-20T08:12:30Z"
+    },
+    "hourly_grouping": {
+      "group_size_minutes": 60,
+      "group_index": 0,
+      "rolled_over": false
+    }
+  },
+  {
+    "window_id": "win_src_demo_classroom_20261120T063000Z",
+    "source_id": "src_demo_classroom",
+    "camera_id": "cam_classroom_3",
+    "window_start": "2026-11-20T06:30:00Z",
+    "window_end": "2026-11-20T06:40:00Z",
+    "window_start_offset_s": 1800.0,
+    "report_id": "rep_src_demo_classroom_20261120T0600Z",
+    "report_date": "2026-11-20",
+    "coverage": {
+      "status": "full",
+      "observed_seconds": 600,
+      "expected_seconds": 600,
+      "gaps": []
+    },
+    "scene_summary": {
+      "text": "A person in a black zip-up jacket walks toward the classroom door. No interaction with the gray jacket on the chair is visible in this window.",
+      "caption_version": "captioner_v1"
+    },
+    "event_ids": [
+      "evt_jacket_worn_seen"
+    ],
+    "observation_ids": [
+      "obs_jacket_worn"
+    ],
+    "sampling": {
+      "base_interval_s": 15,
+      "dense_interval_s": 2,
+      "dense_intervals": [
+        { "start": "2026-11-20T06:29:30Z", "end": "2026-11-20T06:30:30Z", "reason": "person activity near door" }
+      ]
+    },
+    "processing": {
+      "pipeline_version": "demo_v1",
+      "detector": "open_vocab_detector_v0",
+      "segmenter": "sam_backed_selector_v0",
+      "captioner": "captioner_v1",
+      "content_hash": "sha256:demo-window-0630",
+      "processed_at": "2026-11-20T08:13:00Z"
+    },
+    "hourly_grouping": {
+      "group_size_minutes": 60,
+      "group_index": 0,
+      "rolled_over": false
+    }
+  }
+]

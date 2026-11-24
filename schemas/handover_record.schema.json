@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lost-and-found/schemas/handover_record.schema.json",
+  "title": "HandoverRecord",
+  "description": "An authorised intake record: staff formally received an item at a stated time. This collection is deliberately separate from item events, and the pipeline cannot write to it. A verified handover exists ONLY when one of these records matches an item. With no intake records, the system says what the footage shows and states that staff receipt cannot be verified — it never infers a handover from a person walking away with an item.",
+  "type": "object",
+  "required": [
+    "handover_id",
+    "intake_reference",
+    "recorded_by",
+    "recorded_at",
+    "received_at",
+    "verification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "handover_id": { "type": "string", "pattern": "^hnd_[a-z0-9_]+$" },
+    "intake_reference": {
+      "type": "string",
+      "description": "The intake desk's own reference for the receipt, e.g. a logbook or queue number. Must be traceable to a human-written record."
+    },
+    "recorded_by": {
+      "type": "string",
+      "description": "Who entered the record. A staff member or role, never the chatbot."
+    },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "received_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When staff actually took the item in. This is the handover moment — distinct from the footage event where someone picked the item up."
+    },
+    "item_description": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What was received, in staff's words. Used only for matching, not as evidence about the footage.",
+      "properties": {
+        "item_type": { "type": ["string", "null"] },
+        "primary_color": { "type": ["string", "null"] },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "description": "How the link between this intake and an observation was established. Without this the chat must not present the pair as confirmed.",
+      "additionalProperties": false,
+      "required": ["method", "status"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["staff_confirmed", "documents_review", "not_linked"],
+          "description": "staff_confirmed = a human matched the recorded intake to the footage event. documents_review = matched from written description only, treated as probable not certain. not_linked = the intake exists but has not been tied to a filming event."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["verified", "probable"],
+          "description": "Only 'verified' may be stated to a user as a confirmed handover. 'probable' must be presented as an unconfirmed possibility."
+        },
+        "linked_observation_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^obs_[a-z0-9_]+$" }
+        },
+        "linked_event_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^evt_[a-z0-9_]+$" }
+        },
+        "verified_by": { "type": ["string", "null"] },
+        "verified_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}
