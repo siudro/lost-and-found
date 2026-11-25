@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
-from datetime import datetime, timezone
+import re
+import secrets
+import shutil
+import threading
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -22,7 +28,7 @@ from starlette.requests import Request
 from .ai.providers import PROVIDERS
 from .core.chat import ChatService
 from .core.diagnostics import provider_summary, run_checks
-from .core.pipeline import IngestError, SourceSpec, run_pipeline
+from .core.pipeline import IngestError, SourceSpec, make_playback_copy, probe_duration, run_pipeline
 from .core.store import Store
 from .core.timeutil import iso_utc, parse_timestamp
 
@@ -138,6 +144,21 @@ def stats():
         store.close()
 
 
+def media_dir() -> Path:
+    """Playback copies live next to the database, on the persistent volume."""
+    db = Path(os.environ.get("DATABASE_PATH", str(DEMO_DB)))
+    return db.parent / "media"
+
+
+SOURCE_ID = re.compile(r"^src_[a-z0-9_]+$")
+
+
+def media_url_for(source_id: str) -> str | None:
+    if SOURCE_ID.match(source_id) and (media_dir() / f"{source_id}.mp4").exists():
+        return f"/media/{source_id}.mp4"
+    return None
+
+
 @app.post("/api/chat")
 def chat(payload: dict):
     text = (payload or {}).get("message", "").strip()
@@ -145,49 +166,115 @@ def chat(payload: dict):
         raise HTTPException(status_code=400, detail="message is required")
     store = get_store()
     try:
-        service = ChatService(store)
+        service = ChatService(store, media_url_for=media_url_for)
         result = service.ask(text)
         return result.to_dict()
     finally:
         store.close()
 
 
-@app.post("/api/ingest")
-async def ingest(
-    file: UploadFile = File(...),
-    camera_id: str = Form("cam_upload_1"),
-    location_label: str = Form("Uploaded footage"),
-    recorded_at: str = Form(...),
-    visibility: str = Form("approved_private"),
-):
-    """Genuine processing path: decode a real clip and store what it finds."""
-    try:
-        started = parse_timestamp(recorded_at)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=f"recorded_at: {error}") from error
+@app.get("/media/{name}")
+def media(name: str):
+    source_id = name.removesuffix(".mp4")
+    path = media_dir() / f"{source_id}.mp4"
+    if not name.endswith(".mp4") or not SOURCE_ID.match(source_id) or not path.exists():
+        raise HTTPException(status_code=404, detail="no playback copy for that footage")
+    return FileResponse(path, media_type="video/mp4")
 
-    suffix = Path(file.filename or "clip.mp4").suffix or ".mp4"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
-        handle.write(await file.read())
-        media_path = handle.name
 
+JOBS: dict[str, dict] = {}
+JOBS_LOCK = threading.Lock()
+WORKER = threading.Semaphore(1)  # one video at a time: 1 GB RAM, 2 vCPU
+
+
+def start_job(title: str, work) -> dict:
+    """Run ``work(log)`` in the background; the page polls /api/jobs/{id}."""
+    job_id = secrets.token_hex(6)
+    job = {"job_id": job_id, "title": title, "status": "queued", "log": [], "result": None, "error": None}
+    with JOBS_LOCK:
+        JOBS[job_id] = job
+        for old in list(JOBS)[:-50]:
+            JOBS.pop(old, None)
+
+    def log(line: str) -> None:
+        job["log"].append(line)
+        del job["log"][:-12]
+
+    def run() -> None:
+        with WORKER:
+            job["status"] = "running"
+            try:
+                job["result"] = work(log)
+                job["status"] = "done"
+            except HTTPException as error:
+                job["status"], job["error"] = "failed", str(error.detail)
+            except IngestError as error:
+                job["status"], job["error"] = "failed", str(error)
+            except Exception as error:  # surfaced to the user, never swallowed
+                job["status"], job["error"] = "failed", f"{type(error).__name__}: {error}"
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": job["status"]}
+
+
+@app.get("/api/jobs/{job_id}")
+def job_status(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job (the server may have restarted)")
+    return job
+
+
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024
+
+
+def _new_source_id(prefix: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"src_{prefix}_{stamp}_{secrets.token_hex(2)}"
+
+
+def ingest_file(
+    media_path: Path,
+    *,
+    source_id: str,
+    camera_id: str,
+    location_label: str | None,
+    recorded_at: datetime | None,
+    kind: str,
+    clock: str,
+    visibility: str,
+    log=None,
+) -> dict:
+    """Process one video file and store everything it produces."""
+    log = log or (lambda line: None)
+    log("reading the video")
+    duration = probe_duration(media_path)
+    if recorded_at is None:
+        # Replayed sample footage: placed so that it ends now.
+        recorded_at = datetime.now(timezone.utc) - timedelta(seconds=duration)
     source = SourceSpec(
-        source_id=f"src_upload_{int(datetime.now(timezone.utc).timestamp())}",
+        source_id=source_id,
         camera_id=camera_id,
         venue_id="venue_upload",
-        kind="recorded_upload",
-        clock="source_clock",
+        kind=kind,
+        clock=clock,
         location_label=location_label,
-        recording_started_at=started,
-        media_path=media_path,
+        recording_started_at=recorded_at,
+        media_path=str(media_path),
+        duration_seconds=duration,
         visibility=visibility,
     )
+    lines: list[str] = []
 
-    log: list[str] = []
-    try:
-        results = run_pipeline(source, progress=log.append)
-    except IngestError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+    def progress(line: str) -> None:
+        lines.append(line)
+        log(line)
+
+    log(f"looking for items left behind in {duration:.0f} s of video")
+    results = run_pipeline(source, progress=progress)
+    log("preparing the video for playback")
+    playback = make_playback_copy(media_path, media_dir() / f"{source_id}.mp4")
+    source.playback_path = str(playback)
 
     store = get_store()
     try:
@@ -200,12 +287,174 @@ async def ingest(
                 store.upsert_event(event)
             for evd in result.evidence:
                 store.upsert_evidence(evd)
-        return {
-            "source_id": source.source_id,
-            "windows": len(results),
-            "log": log,
-            "events": [e for r in results for e in r.events],
-        }
+        return footage_summary(store, source.to_record()) | {"log": [l for l in lines if not l.startswith("analysed")]}
+    finally:
+        store.close()
+
+
+def footage_summary(store: Store, source: dict) -> dict:
+    zone = ZoneInfo(source.get("timezone") or "Asia/Riyadh")
+    started = source.get("recording_started_at")
+    items = []
+    for obs in store.observations_for_source(source["source_id"]):
+        events = [e for e in store.events_for_source(source["source_id"])
+                  if e["observation_id"] == obs["observation_id"]]
+        items.append({
+            "observation_id": obs["observation_id"],
+            "state": obs["state"],
+            "colour": obs["attributes"].get("primary_color"),
+            "item_type": obs["attributes"].get("item_type"),
+            "location": obs["attributes"].get("location_label"),
+            "caption": obs.get("caption_text"),
+            "events": [
+                {
+                    "type": e["event_type"],
+                    "state": e["state_at_event"],
+                    "offset_s": e["event_time_offset_s"],
+                    "local_time": parse_timestamp(e["event_time"]).astimezone(zone).strftime("%H:%M:%S")
+                    if e.get("event_time") else None,
+                }
+                for e in events
+            ],
+        })
+    local_start = parse_timestamp(started).astimezone(zone) if started else None
+    return {
+        "source_id": source["source_id"],
+        "location_label": source.get("location_label"),
+        "kind": source.get("kind"),
+        "recorded_at": started,
+        "recorded_local": local_start.strftime("%d %B %Y, %H:%M") if local_start else None,
+        "recorded_day": local_start.strftime("%d %B %Y").lstrip("0") if local_start else None,
+        "duration_s": source.get("duration_seconds"),
+        "media_url": media_url_for(source["source_id"]),
+        "items": items,
+    }
+
+
+@app.post("/api/ingest")
+def ingest(
+    file: UploadFile = File(...),
+    camera_id: str = Form("cam_upload_1"),
+    location_label: str = Form(""),
+    recorded_at: str = Form(...),
+    visibility: str = Form("approved_private"),
+):
+    """Upload a clip: decode it, find items that were left, keep a playback copy."""
+    try:
+        started = parse_timestamp(recorded_at)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"recorded_at: {error}") from error
+    if visibility not in {"public_demo", "approved_private", "internal_only"}:
+        raise HTTPException(status_code=400, detail="unknown visibility")
+
+    source_id = _new_source_id("upload")
+    suffix = Path(file.filename or "clip.mp4").suffix.lower()[:8] or ".mp4"
+    uploads = media_dir() / "incoming"
+    uploads.mkdir(parents=True, exist_ok=True)
+    target = uploads / f"{source_id}{suffix}"
+    size = 0
+    try:
+        with target.open("wb") as handle:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="video is larger than the upload limit")
+                handle.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="the uploaded file is empty")
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+
+    def work(log):
+        try:
+            return ingest_file(
+                target,
+                source_id=source_id,
+                camera_id=camera_id or "cam_upload_1",
+                location_label=location_label.strip() or None,
+                recorded_at=started,
+                kind="recorded_upload",
+                clock="source_clock",
+                visibility=visibility,
+                log=log,
+            )
+        finally:
+            target.unlink(missing_ok=True)
+
+    return start_job(file.filename or "uploaded video", work)
+
+
+# Real footage that may be shown publicly: CAVIAR, Creative Commons BY-SA.
+# Acknowledgement requested by the dataset: EC Funded CAVIAR project/IST 2001 37540,
+# http://homepages.inf.ed.ac.uk/rbf/CAVIAR/
+CAVIAR_BASE = "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1"
+SAMPLES = {
+    "left_bag_at_chair": ("LeftBag_AtChair/LeftBag_AtChair.mpg", "Person leaves a bag at the chairs"),
+    "left_bag_picked_up": ("LeftBag_PickedUp/LeftBag_PickedUp.mpg", "Person leaves a bag, then picks it up"),
+    "left_bag": ("LeftBag/LeftBag.mpg", "Person leaves a bag by the wall"),
+    "left_box": ("LeftBox/LeftBox.mpg", "Person leaves a box"),
+}
+
+
+@app.get("/api/samples")
+def samples():
+    return {
+        "credit": "CAVIAR dataset (EC Funded CAVIAR project/IST 2001 37540), CC BY-SA",
+        "samples": [{"id": key, "title": title} for key, (_, title) in SAMPLES.items()],
+    }
+
+
+@app.post("/api/samples/{sample_id}")
+def ingest_sample(sample_id: str):
+    """Fetch a real CAVIAR clip on the server and process it like an upload.
+
+    The clips were recorded in 2003. They are replayed with timestamps from
+    the moment of ingest (clock = ingestion_clock) so they can be searched
+    as today's footage, and the location label says so.
+    """
+    if sample_id not in SAMPLES:
+        raise HTTPException(status_code=404, detail="unknown sample")
+    path, title = SAMPLES[sample_id]
+
+    def work(log):
+        incoming = media_dir() / "incoming"
+        incoming.mkdir(parents=True, exist_ok=True)
+        target = incoming / f"{sample_id}_{secrets.token_hex(3)}.mpg"
+        try:
+            log("downloading the sample clip from the CAVIAR archive")
+            request = urllib.request.Request(f"{CAVIAR_BASE}/{path}", headers={"User-Agent": "FoundIt/0.2"})
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response, target.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
+            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                raise HTTPException(status_code=502, detail=f"could not download the sample clip: {error}") from error
+            return ingest_file(
+                target,
+                source_id=_new_source_id(f"caviar_{sample_id}"),
+                camera_id="cam_caviar_inria",
+                location_label=f"CAVIAR sample: {title} (INRIA lobby, 2003, replayed as today)",
+                recorded_at=None,
+                kind="replay",
+                clock="ingestion_clock",
+                visibility="public_demo",
+                log=log,
+            )
+        finally:
+            target.unlink(missing_ok=True)
+
+    return start_job(title, work)
+
+
+@app.get("/api/footage")
+def footage():
+    """Everything that has been processed, newest first, with what was found."""
+    store = get_store()
+    try:
+        sources = sorted(
+            store.sources(), key=lambda s: s.get("recording_started_at") or "", reverse=True
+        )
+        return {"footage": [footage_summary(store, s) for s in sources]}
     finally:
         store.close()
 

@@ -339,10 +339,14 @@ class Store:
 
         items = [i for i in item_terms]
         if items:
+            # An item whose type the detector could not determine (NULL) can
+            # still be the jacket being asked about, so it stays in the
+            # results. The ranking puts confirmed types first and the answer
+            # says the type is unknown.
             marks = ",".join("?" for _ in items)
             clauses.append(
                 f"observation_id IN (SELECT observation_id FROM observations "
-                f"WHERE item_type IN ({marks}))"
+                f"WHERE item_type IN ({marks}) OR item_type IS NULL)"
             )
             params.extend(items)
 
@@ -433,3 +437,31 @@ class Store:
             "SELECT payload FROM events WHERE window_id = ?", (window_id,)
         ).fetchall()
         return [json.loads(r["payload"]) for r in rows]
+
+    def source(self, source_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT payload FROM sources WHERE source_id = ?", (source_id,)
+        ).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def observations_for_source(self, source_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT payload FROM observations WHERE source_id = ? ORDER BY first_seen_at",
+            (source_id,),
+        ).fetchall()
+        return [json.loads(r["payload"]) for r in rows]
+
+    def events_for_source(self, source_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT payload FROM events WHERE source_id = ? ORDER BY event_time",
+            (source_id,),
+        ).fetchall()
+        return [json.loads(r["payload"]) for r in rows]
+
+    def footage_spans(self) -> list[tuple[str, str]]:
+        """(earliest window start, latest window end) per source, oldest first."""
+        rows = self._conn.execute(
+            """SELECT MIN(window_start) AS s, MAX(window_end) AS e FROM windows
+               GROUP BY source_id ORDER BY s"""
+        ).fetchall()
+        return [(r["s"], r["e"]) for r in rows]
