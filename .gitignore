@@ -1,8 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
 .venv/
 venv/
-__pycache__/
-*.pyc
+data/
+*.db
 .env
 media/
 models/
-.env.local
+!.env.example

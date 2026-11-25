@@ -1,0 +1,10 @@
+# Railway/Nixpacks: ffmpeg is required to decode video. Without it the app
+# still starts and demo mode works, but /api/ingest returns 422.
+[phases.setup]
+nixPkgs = ["...", "ffmpeg"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
