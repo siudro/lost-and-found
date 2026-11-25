@@ -153,7 +153,7 @@ def compose_matches(
         "likely_unattended": "was left unattended",
         "possibly_unattended": "may have been left unattended (nobody was near it for a while)",
         "moved": "was later picked up or moved",
-        "stationary": "was put down with someone staying near it",
+        "stationary": "was put down with people close by",
     }.get(best.state, "appears in the footage")
     item = best.item_type or "item"
     colour = f"{best.colour} " if best.colour else ""
