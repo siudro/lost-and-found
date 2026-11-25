@@ -285,13 +285,18 @@ def build_item_report(
 
     seconds_alone = int(verdict.seconds_deserted)
     pieces = [
-        f"An item ({colour or 'colour unclear'}) was put down {location} at "
+        f"An item ({colour or 'colour unclear'}) was put down {track.location_phrase()} at "
         f"{_clock(local_tz, at(track.placed_offset_s))}."
     ]
     if unattended:
         pieces.append(
             f"Nobody was near it from {_clock(local_tz, at(onset_offset))} "
             f"(about {seconds_alone} s in total)."
+        )
+    elif verdict.state is State.STATIONARY and seconds_alone >= 3:
+        pieces.append(
+            f"Nobody was near it for about {seconds_alone} s at most, which is not long "
+            f"enough to count as unattended (that needs {int(thresholds.deserted_seconds)} s)."
         )
     elif verdict.state is State.STATIONARY:
         pieces.append("Someone stayed near it.")
