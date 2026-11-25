@@ -127,6 +127,8 @@ class ChatService:
                 f"Searched {start.strftime('%d %b %Y')} "
                 f"({date_range.resolved_from or 'that day'}) in {self.timezone_name}."
             )
+        if (end - start) == timedelta(days=1) and start.hour == 0 and start.minute == 0:
+            return f"Searched the whole of {start.strftime('%d %b %Y')} in {self.timezone_name}."
         return (
             f"Searched {start.strftime('%d %b %Y %H:%M')} to "
             f"{end.strftime('%H:%M')} in {self.timezone_name}."
@@ -169,18 +171,19 @@ class ChatService:
         requested = (date_range.end_utc - date_range.start_utc).total_seconds()
         if observed < requested - 60:
             zone = venue_zone(self.timezone_name)
-            spans = ", ".join(
+            labels = list(dict.fromkeys(
                 f"{parse_timestamp(w['window_start']).astimezone(zone).strftime('%H:%M')}–"
                 f"{parse_timestamp(w['window_end']).astimezone(zone).strftime('%H:%M')}"
-                for w in coverage[:6]
-            )
+                for w in coverage
+            ))
+            spans = ", ".join(labels[:6]) + ("…" if len(labels) > 6 else "")
             minutes = observed / 60
             amount = f"{minutes:.0f} minutes" if minutes >= 2 else f"{observed:.0f} seconds"
             limitations.append(Limitation(
                 kind="unprocessed_period",
                 description=(
                     f"Only {amount} of footage exist for the time you asked about "
-                    f"(within {spans}{'…' if len(coverage) > 6 else ''}). "
+                    f"(within {spans}). "
                     "Anything outside that could not be checked."
                 ),
             ))
