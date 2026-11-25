@@ -168,6 +168,7 @@ Unattended thresholds for ingested footage (environment variables): `UNATTENDED_
 - The detector does not know what an item is. The item type is reported as unknown, and answers say so and point to the clip.
 - Anything already in view when the recording starts becomes part of the background and is not detected.
 - A person who stands completely still can look like an item; shapes whose pixels keep moving like a person's are ignored, but not every case is caught.
+- Areas that look onto somewhere else (a glass railing over another floor, a window onto a street) need an ignore zone: `DetectorConfig(ignore_polygons=...)`. The CAVIAR samples use one for the glass railing in the lower left. Uploads have no ignore zone yet; there is no UI for drawing one.
 - The camera must not move. A large sudden change (camera bumped, lights switched) rebuilds the background, and any items being tracked at that moment are dropped.
 - No SAM or captioner enabled by default, so descriptions come from colour and position in the frame.
 - Demo fixtures are hand-written to exercise the contract, not captured from real footage.

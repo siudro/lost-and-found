@@ -27,6 +27,7 @@ from starlette.requests import Request
 
 from .ai.providers import PROVIDERS
 from .core.chat import ChatService
+from .core.detector import DetectorConfig
 from .core.diagnostics import provider_summary, run_checks
 from .core.pipeline import IngestError, SourceSpec, make_playback_copy, probe_duration, run_pipeline
 from .core.store import Store
@@ -244,6 +245,7 @@ def ingest_file(
     clock: str,
     visibility: str,
     log=None,
+    detector_config=None,
 ) -> dict:
     """Process one video file and store everything it produces."""
     log = log or (lambda line: None)
@@ -271,7 +273,7 @@ def ingest_file(
         log(line)
 
     log(f"looking for items left behind in {duration:.0f} s of video")
-    results = run_pipeline(source, progress=progress)
+    results = run_pipeline(source, progress=progress, detector_config=detector_config)
     log("preparing the video for playback")
     playback = make_playback_copy(media_path, media_dir() / f"{source_id}.mp4")
     source.playback_path = str(playback)
@@ -389,6 +391,12 @@ def ingest(
 # Acknowledgement requested by the dataset: EC Funded CAVIAR project/IST 2001 37540,
 # http://homepages.inf.ed.ac.uk/rbf/CAVIAR/
 CAVIAR_BASE = "https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA1"
+# The CAVIAR INRIA camera looks down through a glass railing (lower left)
+# onto another floor. People and plants down there are not in this room.
+CAVIAR_IGNORE = (
+    ((0.0, 0.514), (0.104, 0.590), (0.3125, 0.660), (0.495, 0.694), (0.521, 1.0), (0.0, 1.0)),
+)
+
 SAMPLES = {
     "left_bag_at_chair": ("LeftBag_AtChair/LeftBag_AtChair.mpg", "Person leaves a bag at the chairs"),
     "left_bag_picked_up": ("LeftBag_PickedUp/LeftBag_PickedUp.mpg", "Person leaves a bag, then picks it up"),
@@ -452,6 +460,7 @@ def ingest_sample(sample_id: str):
                 clock="ingestion_clock",
                 visibility="public_demo",
                 log=log,
+                detector_config=DetectorConfig(ignore_polygons=CAVIAR_IGNORE),
             )
         finally:
             target.unlink(missing_ok=True)
@@ -477,11 +486,15 @@ def footage_tracks(source_id: str):
     if not SOURCE_ID.match(source_id) or not path.exists():
         raise HTTPException(status_code=404, detail="no playback copy for that footage")
     analysed = "playback copy"
-    for sample_id in SAMPLES:
-        if source_id.startswith(f"src_caviar_{sample_id}_") and sample_original(sample_id).exists():
-            path, analysed = sample_original(sample_id), "original sample file"
+    config = DetectorConfig()
+    matches = [key for key in SAMPLES if source_id.startswith(f"src_caviar_{key}_")]
+    if matches:
+        sample_id = max(matches, key=len)  # "left_bag" is a prefix of "left_bag_at_chair"
+        config = DetectorConfig(ignore_polygons=CAVIAR_IGNORE)
+        if sample_original(sample_id).exists():
+            path, analysed = sample_original(sample_id), f"original sample file ({sample_id})"
     with WORKER:
-        result = detect_left_items(path)
+        result = detect_left_items(path, config)
     return {
         "analysed": analysed,
         "frames": result.frames_analysed,

@@ -109,3 +109,13 @@ def test_light_changing_on_the_floor_is_not_an_item(tmp_path):
     (obs,) = data["observations.json"]           # only the bag
     assert obs["attributes"]["primary_color"] == "black"
     assert abs(_seconds(obs["first_seen_at"]) - 10) <= 2
+
+
+def test_ignore_zone_hides_items_only_inside_it(tmp_path):
+    from app.core.detector import DetectorConfig, detect_left_items
+
+    clip = scenes.left_behind(tmp_path / "zone.mp4")
+    over_bag = (((0.4, 0.6), (0.9, 0.6), (0.9, 1.0), (0.4, 1.0)),)
+    elsewhere = (((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),)
+    assert detect_left_items(clip, DetectorConfig(ignore_polygons=over_bag)).tracks == []
+    assert len(detect_left_items(clip, DetectorConfig(ignore_polygons=elsewhere)).tracks) == 1
