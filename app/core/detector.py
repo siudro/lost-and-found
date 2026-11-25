@@ -121,6 +121,11 @@ class ItemTrack:
     ended_offset_s: float | None = None
     colour_samples: list[tuple[int, int, int]] = field(default_factory=list)
     frame_size: tuple[int, int] = (0, 0)
+    surround_activity: float = 0.0
+    """Share of the whole clip during which the ring around the item was
+    moving. A spot seen through a glass railing onto a busy floor below, or
+    swaying plants, is busy all the time; a floor where a bag is left is
+    quiet apart from the person who left it."""
 
     @property
     def bbox(self) -> tuple[int, int, int, int]:
@@ -439,6 +444,7 @@ def detect_left_items(
     long_bg = np.median(np.stack(init_frames), axis=0).astype(np.float32)
     short_bg = cv2.GaussianBlur(buffered[0][1], (5, 5), 0).astype(np.float32)
     static_age = np.zeros(long_bg.shape[:2], dtype=np.float32)
+    activity = np.zeros(long_bg.shape[:2], dtype=np.float32)
 
     def all_frames():
         yield from buffered
@@ -474,6 +480,7 @@ def detect_left_items(
         else:
             big_change_since = None
 
+        activity += moving
         still = changed_long & ~moving
         occluded = changed_long & moving
         static_age = np.where(still, static_age + dt, np.where(occluded, static_age, 0.0))
@@ -550,8 +557,11 @@ def detect_left_items(
         # (a sunbeam moving across the floor). Re-check every two seconds.
         if frames % max(1, int(config.sample_fps * 2)) == 0:
             for track in list(active):
-                if track.track_id in matched and _only_light_changed(blurred, long_bg, track.bbox, config.light_ncc, item_mask) \
-                        and not _has_object_edges(blurred, long_bg, track.bbox):
+                if track.track_id in matched and (
+                    _is_ghost(blurred, long_bg, item_mask, track.bbox, config.ghost_edge_ratio)
+                    or (_only_light_changed(blurred, long_bg, track.bbox, config.light_ncc, item_mask)
+                        and not _has_object_edges(blurred, long_bg, track.bbox))
+                ):
                     x, y, w, h = track.bbox
                     region = item_mask[y:y + h, x:x + w].astype(bool)
                     long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
@@ -579,6 +589,17 @@ def detect_left_items(
             progress(f"analysed {offset:.0f}s of video, {len(active)} item(s) in view")
 
     finished.extend(active)
+    rate = activity / max(frames, 1)
+    for track in finished:
+        if not track.points:
+            continue
+        x, y, w, h = track.bbox
+        pad = max(4, min(w, h) // 2)
+        y0, y1 = max(0, y - pad), min(rate.shape[0], y + h + pad)
+        x0, x1 = max(0, x - pad), min(rate.shape[1], x + w + pad)
+        ring = np.ones((y1 - y0, x1 - x0), bool)
+        ring[y - y0:y - y0 + h, x - x0:x - x0 + w] = False
+        track.surround_activity = float(rate[y0:y1, x0:x1][ring].mean()) if ring.any() else 0.0
     tracks = [
         t for t in finished
         if len(t.points) >= 2 and t.last_seen_offset_s - t.detected_offset_s >= 1.0
