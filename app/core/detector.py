@@ -84,6 +84,10 @@ class DetectorConfig:
     frame is a ghost: something that was there and left, revealing the floor.
     Ghosts are healed into the background instead of reported."""
 
+    light_ncc: float = 0.75
+    """Correlation above which a changed patch is treated as the same floor
+    under different light, not an object."""
+
     scene_change_ratio: float = 0.45
     """If this fraction of the frame differs from the background, the camera
     moved or the lights changed. The background is rebuilt rather than
@@ -327,6 +331,73 @@ def _is_ghost(frame: np.ndarray, background: np.ndarray, mask: np.ndarray, box, 
     return past > ratio * max(live, 1.0)
 
 
+def _has_object_edges(frame: np.ndarray, background: np.ndarray, box) -> bool:
+    """A real object adds a clear outline that the background lacks."""
+    x, y, w, h = box
+    live = float(_edges(frame[y:y + h, x:x + w]).mean())
+    past = float(_edges(background[y:y + h, x:x + w]).mean())
+    return live > 1.5 * past + 10
+
+
+def _crisp_outline(frame: np.ndarray, background: np.ndarray, box, mask: np.ndarray | None) -> bool:
+    x, y, w, h = box
+    pad = 3
+    y0, y1 = max(0, y - pad), min(frame.shape[0], y + h + pad)
+    x0, x1 = max(0, x - pad), min(frame.shape[1], x + w + pad)
+    if mask is None:
+        region = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        region[y - y0:y - y0 + h, x - x0:x - x0 + w] = 1
+    else:
+        region = mask[y0:y1, x0:x1].astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    band = (cv2.dilate(region, kernel) - cv2.erode(region, kernel)).astype(bool)
+    if not band.any():
+        return False
+    live = float(_edges(frame[y0:y1, x0:x1])[band].mean())
+    past = float(_edges(background[y0:y1, x0:x1])[band].mean())
+    return live > 1.5 * past + 12
+
+
+def _only_light_changed(frame: np.ndarray, background: np.ndarray, box, min_ncc: float,
+                        mask: np.ndarray | None = None) -> bool:
+    """Is this a lighting change rather than an object?
+
+    When sunlight, a shadow or the camera's exposure shifts, the floor's
+    pattern survives and only gets brighter or darker, so inside the changed
+    region the live pixels correlate strongly with the background. A real
+    object replaces the pattern and the correlation collapses. Textureless
+    regions fall back to a colour test: a brightness change keeps the hue.
+    """
+    x, y, w, h = box
+    live_bgr = frame[y:y + h, x:x + w].astype(np.float32)
+    past_bgr = background[y:y + h, x:x + w].astype(np.float32)
+    inside = np.ones((h, w), bool) if mask is None else mask[y:y + h, x:x + w].astype(bool)
+    if inside.sum() >= 30:
+        inside = cv2.erode(inside.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) if inside.sum() > 80 else inside
+    if inside.sum() < 12:
+        return False
+    live = cv2.cvtColor(live_bgr.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)[inside]
+    past = cv2.cvtColor(past_bgr.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)[inside]
+    if live.mean() > past.mean() + 15 and float((live >= 240).mean()) > 0.5:
+        return True  # sunlight blew the patch out to white; no object does that
+    live_c, past_c = live - live.mean(), past - past.mean()
+    live_sd, past_sd = float(live_c.std()), float(past_c.std())
+    if past_sd < 3:
+        # Flat background: compare hue (chromaticity) instead of pattern.
+        a = live_bgr[inside].mean(axis=0)
+        b = past_bgr[inside].mean(axis=0)
+        same_hue = float(np.abs(a / max(a.sum(), 1) - b / max(b.sum(), 1)).max()) < 0.02
+        if not (same_hue and live_sd < 6):
+            return False
+        # A gray bag on a smooth gray floor also keeps the hue. What a bag
+        # has and a soft shadow lacks is a crisp outline.
+        return not _crisp_outline(frame, background, box, mask)
+    if live_sd < 2:
+        return False  # pattern vanished: something flat now covers it
+    ncc = float((live_c * past_c).mean() / (live_sd * past_sd))
+    return ncc >= min_ncc
+
+
 def detect_left_items(
     path: str | Path,
     config: DetectorConfig | None = None,
@@ -437,7 +508,8 @@ def detect_left_items(
                     best, best_score = track, score
             if best is None or best_score < 0.2:
                 x, y, w, h = box
-                if _is_ghost(blurred, long_bg, item_mask, box, config.ghost_edge_ratio):
+                if _is_ghost(blurred, long_bg, item_mask, box, config.ghost_edge_ratio) or \
+                        _only_light_changed(blurred, long_bg, box, config.light_ncc, item_mask):
                     region = item_mask[y:y + h, x:x + w].astype(bool)
                     long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
                     static_age[y:y + h, x:x + w][region] = 0
@@ -473,6 +545,20 @@ def detect_left_items(
                 best.colour_samples.append(tuple(int(v) for v in np.median(pixels, axis=0)))
                 if len(best.colour_samples) > 50:
                     best.colour_samples.pop(0)
+
+        # Light can creep over an item's region after it was first accepted
+        # (a sunbeam moving across the floor). Re-check every two seconds.
+        if frames % max(1, int(config.sample_fps * 2)) == 0:
+            for track in list(active):
+                if track.track_id in matched and _only_light_changed(blurred, long_bg, track.bbox, config.light_ncc, item_mask) \
+                        and not _has_object_edges(blurred, long_bg, track.bbox):
+                    x, y, w, h = track.bbox
+                    region = item_mask[y:y + h, x:x + w].astype(bool)
+                    long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
+                    static_age[y:y + h, x:x + w][region] = 0
+                    active.remove(track)
+                    matched.discard(track.track_id)
+                    ghosts += 1
 
         still_active = []
         for track in active:

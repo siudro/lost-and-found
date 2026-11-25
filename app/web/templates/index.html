@@ -314,12 +314,21 @@ async function loadFootage() {
       return `<details style="margin:8px 0" class="item"><summary>${esc(f.location_label || f.source_id)} — ${esc(f.recorded_local || 'time unknown')}
         · ${f.items.length} item(s)</summary>
         ${f.media_url ? videoBlock(vid, f.media_url, 0) : '<p class="meta">Built-in demo records (no video stored).</p>'}
-        ${itemList(f, vid)}</details>`;
+        ${itemList(f, vid)}
+        ${f.source_id.startsWith('src_demo') ? '' : `<button class="jump" style="color:#b91c1c" onclick="deleteFootage('${esc(f.source_id)}')">Delete this footage</button>`}</details>`;
     }).join('');
     const newest = body.footage.find(f => f.media_url);
     if (newest && newest.recorded_day && !$('chips').dataset.set) buildChips(newest.recorded_day);
   } catch { $('footage').innerHTML = '<div class="err">Could not load the footage list.</div>'; }
 }
+
+async function deleteFootage(id) {
+  if (!confirm('Delete this footage and everything found in it? This cannot be undone.')) return;
+  const res = await fetch(`/api/footage/${id}`, {method: 'DELETE'});
+  if (!res.ok) { const b = await res.json().catch(() => ({})); alert(b.detail || 'Could not delete'); }
+  loadFootage();
+}
+window.deleteFootage = deleteFootage;
 
 async function loadChecks() {
   try {

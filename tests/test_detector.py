@@ -102,3 +102,10 @@ def test_people_in_shot_at_the_start_do_not_become_items(tmp_path):
     assert obs["attributes"]["primary_color"] == "black"
     assert abs(_seconds(obs["first_seen_at"]) - 12) <= 2
     assert obs["state"] in {"possibly_unattended", "likely_unattended"}
+
+
+def test_light_changing_on_the_floor_is_not_an_item(tmp_path):
+    data = _run(tmp_path, scenes.sunlight)
+    (obs,) = data["observations.json"]           # only the bag
+    assert obs["attributes"]["primary_color"] == "black"
+    assert abs(_seconds(obs["first_seen_at"]) - 10) <= 2
