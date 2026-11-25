@@ -14,20 +14,16 @@ No keys, no GPU, no model downloads. Demo footage seeds itself on first run.
 
 # Deploying to Railway
 
-## The bug that broke your last deploy
+## Why the Railway deploy kept failing
 
-`nixpacks.toml` had:
+The `Dockerfile` had two stages, `base` and then `test`. A build with no `--target`, which is what Railway runs, builds the **last** stage, and that was `test`. Two failures followed from it:
 
-```toml
-[start]
-cmd = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
-```
+1. **The build itself failed.** The `test` stage ran `pip install -r requirements-dev.txt`, but that file was never `COPY`'d into the image, so pip stopped with "Could not open requirements file".
+2. **Even with that file copied, the deploy would fail.** The `test` stage's `CMD` runs pytest and exits. The web server never starts, so `/api/health` never answers and Railway marks the deploy failed.
 
-Nixpacks runs that as an **exec array**, not through a shell, so `${PORT:-8000}` was never expanded — uvicorn received the literal string `${PORT:-8000}` as its port argument and exited immediately. Railway reported a failed deploy with no obvious cause.
+**Fix:** the runtime stage is now the last stage in the file, and the `test` stage copies `requirements-dev.txt` before installing it. Keep `runtime` last. `railway.json` also no longer sets `"startCommand": null`; the Dockerfile `CMD` is the only start command. `pytest` and `httpx` moved out of `requirements.txt` into `requirements-dev.txt`, so they are no longer installed in production.
 
-There was a second problem: `railway.json` also set a `startCommand`, and when both exist Nixpacks and the start command can disagree about which one wins.
-
-**Both are fixed.** `nixpacks.toml` is deleted and the project now builds from a `Dockerfile`, where the `CMD` is in shell form so `$PORT` expands correctly. The port expansion below is verified by running the shell command directly, not by building the image:
+`CMD` stays in shell form so Railway's `$PORT` expands:
 
 ```
 $ PORT=9099 sh -c 'echo "uvicorn ... --port ${PORT:-8000}"'
@@ -71,7 +67,8 @@ Then open `/` — the readiness panel should show `storage — sqlite writable (
 | Symptom | Cause | Fix |
 |---|---|---|
 | Build fails on `apt-get update` | Railway builder is not using the Dockerfile | Check `railway.json` says `"builder": "DOCKERFILE"` |
-| Container starts then exits | `$PORT` not expanding | Confirm `CMD` is shell form, not `CMD ["...", "..."]` |
+| Container starts then exits | Wrong stage built, or `$PORT` not expanding | `runtime` must be the last stage in the `Dockerfile`; `CMD` must be shell form |
+| Build fails: `Could not open requirements file` | Old `Dockerfile` with `test` as the last stage | Pull the fixed `Dockerfile` |
 | Healthcheck times out | App slower than 120s to boot | Already raised from 100s; check build logs |
 | 502 on the domain | Domain generated before deploy finished | Wait, or check deploy logs |
 | `/api/ingest` returns 422 | ffmpeg missing | The Dockerfile installs it; check the build log for the `apt-get` step |
@@ -132,6 +129,7 @@ The answer is composed from evidence in `app/core/answer.py` **first**, then opt
 # Tests
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest tests/ -q                   # 77 tests
 python tests/validate_fixtures.py            # 140 schema + rule checks
 python tests/test_rules_catch_violations.py  # 15/15 forbidden states rejected
