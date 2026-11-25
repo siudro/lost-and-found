@@ -134,3 +134,15 @@ def passers_by(out: Path) -> Path:
         Person([(12, -20, 270), (19, 420, 270)], colour=(90, 60, 20)),
     ]
     return render(out, 25, people, [])
+
+
+def busy_start(out: Path) -> Path:
+    """What broke the first version on real footage: someone is standing in
+    shot when recording starts and then walks off (their spot must not
+    become a fake item), and later a small dark bag is left by somebody
+    else, who walks away at ~16 s."""
+    stander = Person([(0, 90, 200), (4, 92, 200), (9, -40, 200)], colour=(40, 60, 40))
+    walker = Person([(0, 420, 270), (8, -30, 270)], colour=(30, 30, 90))
+    leaver = Person([(8, 420, 240), (12, 260, 240), (15, 260, 240), (20, 420, 240)])
+    bag = Item(placed_at=12, removed_at=None, x=270, y=222, w=14, h=10, colour=(35, 35, 40))
+    return render(out, 50, [stander, walker, leaver], [bag], carried_by={0: 2})

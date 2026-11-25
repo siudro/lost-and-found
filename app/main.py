@@ -446,6 +446,51 @@ def ingest_sample(sample_id: str):
     return start_job(title, work)
 
 
+@app.get("/api/footage/{source_id}/tracks")
+def footage_tracks(source_id: str):
+    """What the detector sees in stored footage, track by track.
+
+    Read-only diagnostics for tuning on real clips: re-runs detection on
+    the playback copy and returns every track, including the ones the
+    pipeline then sets aside as people, with the per-moment distance to the
+    nearest moving person.
+    """
+    from statistics import median
+
+    from .core.detector import detect_left_items
+    from .core.pipeline import is_person_like
+
+    path = media_dir() / f"{source_id}.mp4"
+    if not SOURCE_ID.match(source_id) or not path.exists():
+        raise HTTPException(status_code=404, detail="no playback copy for that footage")
+    with WORKER:
+        result = detect_left_items(path)
+    return {
+        "frames": result.frames_analysed,
+        "frame_size": result.frame_size,
+        "ghosts_healed": result.ghosts_healed,
+        "scene_resets": result.scene_resets,
+        "tracks": [
+            {
+                "id": t.track_id,
+                "placed_s": round(t.placed_offset_s, 1),
+                "detected_s": round(t.detected_offset_s, 1),
+                "last_seen_s": round(t.last_seen_offset_s, 1),
+                "end": t.end_reason,
+                "colour": t.colour_name(),
+                "bbox": t.bbox,
+                "person_like": is_person_like(t),
+                "motion_median": round(median(p.internal_motion for p in t.points), 3),
+                "distance": [
+                    [round(p.offset_s, 1), None if p.person_distance_ratio is None else round(p.person_distance_ratio, 3)]
+                    for p in t.points[::5]
+                ],
+            }
+            for t in result.tracks
+        ],
+    }
+
+
 @app.get("/api/footage")
 def footage():
     """Everything that has been processed, newest first, with what was found."""
