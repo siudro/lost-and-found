@@ -299,7 +299,10 @@ def build_item_report(
             f"enough to count as unattended (that needs {int(thresholds.deserted_seconds)} s)."
         )
     elif verdict.state is State.STATIONARY:
-        pieces.append("Someone stayed near it.")
+        pieces.append(
+            "There was nearly always someone close to it (not necessarily its owner), "
+            "so it does not count as unattended."
+        )
     if removed:
         pieces.append(f"It was picked up or moved at {_clock(local_tz, at(track.ended_offset_s))}.")
     elif track.end_reason == "lost":
