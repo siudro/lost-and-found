@@ -12,30 +12,41 @@
     header { border-bottom:1px solid var(--line); background:#fff; padding:14px 20px; }
     header h1 { margin:0; font-size:18px; letter-spacing:-0.01em; }
     header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
-    main { max-width:760px; margin:0 auto; padding:24px 20px 80px; }
+    main { max-width:780px; margin:0 auto; padding:24px 20px 80px; }
     .panel { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
-    label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
-    input, button { font:inherit; }
-    input[type=text] { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; }
-    button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; cursor:pointer; font-weight:600; }
+    h2 { font-size:15px; margin:0 0 4px; }
+    .sub { color:var(--muted); font-size:13px; margin:0 0 12px; }
+    label { display:block; font-size:13px; font-weight:600; margin:10px 0 4px; }
+    input, button, select { font:inherit; }
+    input[type=text], input[type=datetime-local] { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+    input[type=file] { font-size:14px; }
+    button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 15px; cursor:pointer; font-weight:600; }
+    button.secondary { background:#eef2ff; color:#1e3a8a; border:1px solid #c7d2fe; font-weight:500; }
     button:disabled { opacity:.55; cursor:default; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .examples { margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; }
-    .chip { background:#f1f5f9; border:1px solid var(--line); border-radius:999px;
-            padding:5px 10px; font-size:13px; cursor:pointer; }
+    .chip { background:#f1f5f9; border:1px solid var(--line); border-radius:999px; padding:5px 10px; font-size:13px; cursor:pointer; }
     .chip:hover { background:#e2e8f0; }
     .answer h3 { margin:0 0 8px; font-size:16px; }
     .answer p { margin:0 0 10px; }
-    .match { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:8px 0; }
-    .match b { font-size:14px; }
+    .match, .item { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:8px 0; }
+    .match b, .item b { font-size:14px; }
     .meta { color:var(--muted); font-size:13px; }
     .warn { background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:10px 12px; font-size:14px; }
     .ok { background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:10px 12px; font-size:14px; }
     .err { background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:10px 12px; font-size:14px; }
+    .tag { display:inline-block; font-size:12px; border-radius:6px; padding:1px 7px; margin-left:6px; font-weight:600; }
+    .tag.likely_unattended { background:#fee2e2; color:#991b1b; }
+    .tag.possibly_unattended { background:#ffedd5; color:#9a3412; }
+    .tag.moved { background:#e0f2fe; color:#075985; }
+    .tag.stationary, .tag.seen { background:#f1f5f9; color:#334155; }
+    video { width:100%; max-height:360px; background:#000; border-radius:8px; margin-top:8px; }
+    .jump { background:none; color:var(--accent); padding:0; font-weight:600; font-size:13px; }
     ul.checks { list-style:none; padding:0; margin:8px 0 0; font-size:13px; }
     ul.checks li { padding:4px 0; border-bottom:1px solid #f3f4f6; }
-    ul.checks li:last-child { border-bottom:0; }
     .pass { color:#15803d; } .warnc { color:#b45309; } .failc { color:#b91c1c; }
-    small.hint { color:var(--muted); display:block; margin-top:8px; font-size:12px; }
+    details summary { cursor:pointer; font-weight:600; font-size:14px; }
+    .progress { font-size:13px; color:var(--muted); margin-top:8px; white-space:pre-line; }
     footer { text-align:center; color:var(--muted); font-size:12px; padding:20px; }
   </style>
 </head>
@@ -47,34 +58,204 @@
 
 <main>
   <div class="panel">
-    <label for="q">What did you lose?</label>
-    <input id="q" type="text" placeholder="Have you seen a gray jacket? I lost it yesterday." />
-    <div class="examples">
-      <span class="chip">Have you seen a gray jacket? I lost it yesterday.</span>
-      <span class="chip">Did anyone leave a blue backpack yesterday?</span>
-      <span class="chip">What happened yesterday?</span>
-      <span class="chip">Did anyone leave a red umbrella yesterday?</span>
+    <h2>1. Add footage</h2>
+    <p class="sub">Upload a video from a fixed camera (a phone on a shelf works), or try a real sample clip.
+      The system finds items that were put down and left, and how long nobody was near them.</p>
+
+    <label for="file">Video file</label>
+    <input id="file" type="file" accept="video/*" />
+    <label for="recorded">When did the recording start?</label>
+    <input id="recorded" type="datetime-local" step="1" />
+    <label for="where">Where was the camera? (optional)</label>
+    <input id="where" type="text" placeholder="e.g. Library, near the entrance" />
+    <div class="row" style="margin-top:12px">
+      <button id="upload">Upload and analyse</button>
     </div>
-    <div style="margin-top:12px"><button id="ask">Search footage</button></div>
-    <small class="hint">Demo footage only. No staff intake records exist, so handovers cannot be verified.</small>
+
+    <label style="margin-top:16px">Or try real footage</label>
+    <div class="row" id="samples"></div>
+    <small class="meta">Sample clips: CAVIAR dataset, EC Funded CAVIAR project/IST 2001 37540, CC BY-SA. Recorded in 2003, replayed as if filmed just now.</small>
+
+    <div id="job"></div>
   </div>
 
-  <div class="panel" id="status">
-    <label>System readiness</label>
-    <div id="checks">Loading…</div>
+  <div class="panel">
+    <h2>2. Ask about a lost item</h2>
+    <input id="q" type="text" placeholder="Did anyone leave a gray bag today?" />
+    <div class="examples" id="chips"></div>
+    <div style="margin-top:12px"><button id="ask">Search footage</button></div>
+    <small class="meta">No staff intake records exist, so handovers to the front desk cannot be verified.</small>
   </div>
 
   <div class="panel answer" id="answer" style="display:none"></div>
+
+  <div class="panel">
+    <h2>Footage on file</h2>
+    <div id="footage" class="meta">Loading…</div>
+  </div>
+
+  <div class="panel">
+    <details>
+      <summary>System readiness</summary>
+      <div id="checks">Loading…</div>
+    </details>
+  </div>
 </main>
 
-<footer>FoundIt — WAICY 2026, LLM track</footer>
+<footer>FoundIt — WAICY 2026, LLM &amp; AI Agent track</footer>
 
 <script>
-const q = document.getElementById('q');
-const askBtn = document.getElementById('ask');
-const answerBox = document.getElementById('answer');
+const $ = id => document.getElementById(id);
+const q = $('q'), askBtn = $('ask'), answerBox = $('answer');
 
-document.querySelectorAll('.chip').forEach(c => c.onclick = () => { q.value = c.textContent; ask(); });
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const STATE = {
+  likely_unattended: 'left unattended',
+  possibly_unattended: 'possibly left unattended',
+  moved: 'picked up or moved',
+  stationary: 'someone stayed near it',
+  seen: 'seen',
+  uncertain: 'uncertain',
+};
+const tag = s => `<span class="tag ${esc(s)}">${esc(STATE[s] || s)}</span>`;
+const clock = secs => { secs = Math.max(0, Math.round(secs || 0)); return `${Math.floor(secs/60)}:${String(secs%60).padStart(2,'0')}`; };
+
+function videoBlock(id, url, seek) {
+  return `<video id="${id}" controls preload="metadata" playsinline src="${esc(url)}#t=${Math.max(0, (seek||0) - 3)}"></video>`;
+}
+function jump(videoId, seconds) {
+  const v = $(videoId);
+  if (!v) return;
+  v.currentTime = Math.max(0, seconds - 3);
+  v.play().catch(() => {});
+  v.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+window.jump = jump;
+
+// ---------- recording time default ----------
+function setLocalInput(input, date) {
+  const pad = n => String(n).padStart(2, '0');
+  input.value = `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+setLocalInput($('recorded'), new Date());
+$('file').addEventListener('change', () => {
+  const f = $('file').files[0];
+  if (!f) return;
+  // Default: the recording ended when the file was last modified.
+  const probe = document.createElement('video');
+  probe.preload = 'metadata';
+  probe.onloadedmetadata = () => {
+    const end = f.lastModified ? new Date(f.lastModified) : new Date();
+    if (isFinite(probe.duration)) setLocalInput($('recorded'), new Date(end - probe.duration * 1000));
+    URL.revokeObjectURL(probe.src);
+  };
+  probe.src = URL.createObjectURL(f);
+});
+
+// ---------- jobs ----------
+function showJob(html) { $('job').innerHTML = html; }
+
+async function followJob(jobId, title) {
+  setBusy(true);
+  showJob(`<div class="progress">Working on “${esc(title)}”…</div>`);
+  while (true) {
+    await new Promise(r => setTimeout(r, 1500));
+    let job;
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      job = await res.json();
+      if (!res.ok) throw new Error(job.detail || 'lost track of the job');
+    } catch (err) {
+      showJob(`<div class="err">${esc(err.message)}</div>`); setBusy(false); return;
+    }
+    if (job.status === 'done') { setBusy(false); showResult(job.result); loadFootage(); return; }
+    if (job.status === 'failed') { setBusy(false); showJob(`<div class="err">Could not process the video: ${esc(job.error)}</div>`); return; }
+    showJob(`<div class="progress">Working on “${esc(title)}”… (${esc(job.status)})\n${esc(job.log.slice(-3).join('\n'))}</div>`);
+  }
+}
+
+function itemList(f, videoId) {
+  if (!f.items.length) {
+    return `<p class="meta">No item was put down and left in this footage. Items already there when the recording started cannot be detected.</p>`;
+  }
+  return f.items.map(it => {
+    const evs = it.events.map(e =>
+      `<button class="jump" onclick="jump('${videoId}', ${Number(e.offset_s)})">▶ ${esc(e.local_time)} (${clock(e.offset_s)} into the video) — ${esc(e.type === 'picked_up' ? 'picked up' : e.type === 'became_stationary' ? 'put down' : 'nobody near it from here')}</button>`
+    ).join('<br>');
+    return `<div class="item"><b>${esc(it.colour || 'colour unclear')} item</b>${tag(it.state)}
+      <div class="meta">${esc(it.caption || '')}</div><div style="margin-top:4px">${evs}</div></div>`;
+  }).join('');
+}
+
+function showResult(f) {
+  const vid = `v_job_${f.source_id}`;
+  const day = f.recorded_day;
+  showJob(`<div class="ok" style="margin-top:12px"><b>Done.</b> ${f.items.length} item(s) found in this footage (${esc(f.recorded_local)}).
+    ${day ? `Try asking: <span class="chip" onclick="askText('Was anything left behind on ${esc(day)}?')">Was anything left behind on ${esc(day)}?</span>` : ''}</div>
+    ${f.media_url ? videoBlock(vid, f.media_url, 0) : ''}${itemList(f, vid)}`);
+  if (day) buildChips(day);
+}
+
+function setBusy(b) {
+  $('upload').disabled = b;
+  document.querySelectorAll('#samples button').forEach(x => x.disabled = b);
+}
+
+$('upload').onclick = async () => {
+  const f = $('file').files[0];
+  if (!f) { showJob('<div class="err">Choose a video file first.</div>'); return; }
+  if (!$('recorded').value) { showJob('<div class="err">Say when the recording started.</div>'); return; }
+  const form = new FormData();
+  form.append('file', f);
+  form.append('recorded_at', new Date($('recorded').value).toISOString());
+  form.append('location_label', $('where').value);
+  setBusy(true);
+  showJob('<div class="progress">Uploading…</div>');
+  try {
+    const res = await fetch('/api/ingest', {method: 'POST', body: form});
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || 'upload failed');
+    followJob(body.job_id, f.name);
+  } catch (err) {
+    setBusy(false);
+    showJob(`<div class="err">${esc(err.message)}</div>`);
+  }
+};
+
+async function loadSamples() {
+  try {
+    const body = await (await fetch('/api/samples')).json();
+    $('samples').innerHTML = body.samples.map(s =>
+      `<button class="secondary" data-id="${esc(s.id)}">${esc(s.title)}</button>`).join('');
+    document.querySelectorAll('#samples button').forEach(b => b.onclick = async () => {
+      setBusy(true);
+      try {
+        const res = await fetch(`/api/samples/${b.dataset.id}`, {method: 'POST'});
+        const job = await res.json();
+        if (!res.ok) throw new Error(job.detail || 'could not start');
+        followJob(job.job_id, b.textContent);
+      } catch (err) { setBusy(false); showJob(`<div class="err">${esc(err.message)}</div>`); }
+    });
+  } catch { $('samples').innerHTML = '<span class="meta">Samples unavailable.</span>'; }
+}
+
+// ---------- chat ----------
+function buildChips(day) {
+  const d = day || 'today';
+  const on = day ? `on ${day}` : 'today';
+  const list = [
+    `Was anything left behind ${on}?`,
+    `Did anyone leave a gray bag ${on}?`,
+    `Have you seen a black backpack ${on}?`,
+    `What happened ${on}?`,
+  ];
+  $('chips').innerHTML = list.map(t => `<span class="chip">${esc(t)}</span>`).join('');
+  document.querySelectorAll('#chips .chip').forEach(c => c.onclick = () => askText(c.textContent));
+}
+function askText(t) { q.value = t; ask(); }
+window.askText = askText;
 askBtn.onclick = ask;
 q.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
 
@@ -86,75 +267,75 @@ async function ask() {
   answerBox.innerHTML = '<p class="meta">Searching…</p>';
   try {
     const res = await fetch('/api/chat', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message})
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message})
     });
     const data = await res.json();
-    if (!res.ok) { answerBox.innerHTML = `<div class="err">${data.detail || 'Request failed'}</div>`; return; }
-    render(data.answer, data.query);
+    if (!res.ok) { answerBox.innerHTML = `<div class="err">${esc(data.detail || 'Request failed')}</div>`; return; }
+    render(data.answer);
+    answerBox.scrollIntoView({behavior: 'smooth', block: 'start'});
   } catch (err) {
-    answerBox.innerHTML = `<div class="err">Could not reach the server: ${err.message}</div>`;
+    answerBox.innerHTML = `<div class="err">Could not reach the server: ${esc(err.message)}</div>`;
   } finally {
     askBtn.disabled = false;
   }
 }
 
-function humanState(state) {
-  const map = {
-    likely_unattended: 'left unattended',
-    possibly_unattended: 'possibly left alone',
-    stationary: 'standing still',
-    seen: 'seen in footage',
-    moved: 'moved later',
-    uncertain: 'uncertain',
-  };
-  return map[state] || String(state || '').replace(/_/g, ' ');
-}
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-function render(a, parsed) {
+function render(a) {
   let html = `<h3>${esc(a.headline)}</h3><p>${esc(a.body)}</p>`;
   if (a.scope_statement) html += `<p class="meta">${esc(a.scope_statement)}</p>`;
-
-  for (const m of a.matches || []) {
-    html += `<div class="match"><b>${esc(m.local_time)} — ${esc(m.colour || '')} ${esc(m.item_type || 'item')}</b>
-      <div class="meta">${esc(m.location_label || 'location not recorded')} · ${esc(m.state_claim === 'likely_unattended' ? 'left unattended' : 'seen in footage')}${m.onset_certainty === 'uncertain' ? ' · onset unknown (present at clip start)' : ''}</div>
-      ${m.evidence_available ? `<div class="meta">Evidence clip available — seek to ${Math.round(m.event_offset_s)}s</div>`
-                             : `<div class="warn">Evidence unavailable for this event.</div>`}</div>`;
-  }
-
+  (a.matches || []).forEach((m, i) => {
+    const vid = `v_match_${i}`;
+    html += `<div class="match"><b>${esc(m.local_time)} — ${esc(m.colour || 'colour unclear')} ${esc(m.item_type || 'item (type unknown)')}</b>${tag(m.state)}
+      <div class="meta">${esc(m.location_label || 'location not recorded')}${m.onset_certainty === 'uncertain' ? ' · onset unknown (present at clip start)' : ''}</div>
+      ${m.caption ? `<div class="meta">${esc(m.caption)}</div>` : ''}
+      ${m.media_url ? videoBlock(vid, m.media_url, m.seek_to_s) +
+          `<button class="jump" onclick="jump('${vid}', ${Number(m.seek_to_s)})">▶ Play from this moment</button>`
+        : m.evidence_available ? `<div class="meta">Video for this demo record is not stored on this server.</div>`
+        : `<div class="warn">Evidence unavailable for this event.</div>`}</div>`;
+  });
   if (a.coverage_limitations && a.coverage_limitations.length) {
-    html += `<div class="warn"><b>Coverage limits:</b><ul>` +
+    html += `<div class="warn"><b>What could not be checked:</b><ul>` +
       a.coverage_limitations.map(l => `<li>${esc(l.description)}</li>`).join('') + `</ul></div>`;
   }
-
-  if (a.handover && a.handover.status === 'no_intake_records') {
-    html += `<div class="warn" style="margin-top:10px">${esc(a.handover.note)}</div>`;
+  if (a.handover && a.handover.status === 'no_intake_records' && a.handover.note) {
+    html += `<div class="meta" style="margin-top:10px">${esc(a.handover.note)}</div>`;
   }
   if (a.clarifying_question) html += `<p><b>${esc(a.clarifying_question)}</b></p>`;
   answerBox.innerHTML = html;
 }
 
+// ---------- footage list ----------
+async function loadFootage() {
+  try {
+    const body = await (await fetch('/api/footage')).json();
+    if (!body.footage.length) { $('footage').innerHTML = 'Nothing yet. Upload a video or try a sample above.'; return; }
+    $('footage').innerHTML = body.footage.map((f, i) => {
+      const vid = `v_list_${i}`;
+      return `<details style="margin:8px 0" class="item"><summary>${esc(f.location_label || f.source_id)} — ${esc(f.recorded_local || 'time unknown')}
+        · ${f.items.length} item(s)</summary>
+        ${f.media_url ? videoBlock(vid, f.media_url, 0) : '<p class="meta">Built-in demo records (no video stored).</p>'}
+        ${itemList(f, vid)}</details>`;
+    }).join('');
+    const newest = body.footage.find(f => f.media_url);
+    if (newest && newest.recorded_day && !$('chips').dataset.set) buildChips(newest.recorded_day);
+  } catch { $('footage').innerHTML = '<div class="err">Could not load the footage list.</div>'; }
+}
+
 async function loadChecks() {
   try {
-    const res = await fetch('/api/readiness');
-    const body = await res.json();
+    const body = await (await fetch('/api/readiness')).json();
     const items = body.checks.map(c => {
       const cls = c.ok ? 'pass' : (c.fatal ? 'failc' : 'warnc');
       const mark = c.ok ? 'PASS' : (c.fatal ? 'FAIL' : 'WARN');
       return `<li><span class="${cls}"><b>${mark}</b></span> ${esc(c.name)} — ${esc(c.detail)}</li>`;
     }).join('');
-    document.getElementById('checks').innerHTML =
-      `<ul class="checks">${items}</ul>` +
-      (body.ok ? `<div class="ok" style="margin-top:10px">Ready.</div>`
-               : `<div class="err" style="margin-top:10px">A required component is missing.</div>`);
-  } catch {
-    document.getElementById('checks').innerHTML = '<div class="err">Could not read readiness.</div>';
-  }
+    $('checks').innerHTML = `<ul class="checks">${items}</ul>`;
+  } catch { $('checks').innerHTML = '<div class="err">Could not read readiness.</div>'; }
 }
+
+buildChips(null);
+loadSamples();
+loadFootage();
 loadChecks();
 </script>
 </body>

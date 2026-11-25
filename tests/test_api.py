@@ -83,3 +83,77 @@ def test_ingest_rejects_an_unparseable_timestamp(client):
         data={"recorded_at": "not-a-time"},
     )
     assert response.status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Footage: upload, background job, playback, search
+# --------------------------------------------------------------------------
+
+
+def _wait(client, job_id, timeout=180):
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] in {"done", "failed"}:
+            return job
+        time.sleep(0.5)
+    raise AssertionError("job did not finish")
+
+
+def test_upload_is_processed_played_back_and_searchable(client, tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.pipeline import ffmpeg_available
+    from tests.scenes import left_behind
+
+    if not ffmpeg_available():
+        pytest.skip("ffmpeg not installed")
+    clip = left_behind(tmp_path / "upload.mp4")
+    started = datetime.now(timezone.utc) - timedelta(minutes=2)
+    with clip.open("rb") as handle:
+        response = client.post(
+            "/api/ingest",
+            files={"file": ("upload.mp4", handle, "video/mp4")},
+            data={"recorded_at": started.isoformat(), "location_label": "Test hall"},
+        )
+    assert response.status_code == 200, response.text
+    job = _wait(client, response.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    result = job["result"]
+    assert len(result["items"]) == 1
+    assert result["items"][0]["state"] == "likely_unattended"
+
+    media = client.get(result["media_url"], headers={"Range": "bytes=0-99"})
+    assert media.status_code == 206
+    assert media.headers["content-type"] == "video/mp4"
+
+    listed = client.get("/api/footage").json()["footage"]
+    assert any(f["source_id"] == result["source_id"] for f in listed)
+
+    answer = client.post("/api/chat", json={"message": "Did anyone leave a gray bag today?"}).json()["answer"]
+    assert answer["answer_mode"] == "matches_found"
+    assert answer["matches"][0]["media_url"] == result["media_url"]
+    assert answer["matches"][0]["seek_to_s"] > 0
+
+
+def test_media_route_refuses_unknown_and_malformed_names(client):
+    assert client.get("/media/src_nothing_here.mp4").status_code == 404
+    assert client.get("/media/..%2F..%2Fetc%2Fpasswd").status_code == 404
+    assert client.get("/media/src_demo_classroom.txt").status_code == 404
+
+
+def test_samples_are_listed_with_credit(client):
+    body = client.get("/api/samples").json()
+    assert "CAVIAR" in body["credit"]
+    assert {s["id"] for s in body["samples"]} >= {"left_bag_at_chair", "left_bag_picked_up"}
+    assert client.post("/api/samples/not_a_sample").status_code == 404
+
+
+def test_question_about_a_day_without_footage_names_days_that_have_it(client):
+    answer = client.post(
+        "/api/chat", json={"message": "Have you seen a gray jacket? I lost it yesterday."}
+    ).json()["answer"]
+    if answer["answer_mode"] == "footage_not_available":
+        assert "20 November 2026" in answer["body"]

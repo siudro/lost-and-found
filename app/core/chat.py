@@ -21,7 +21,7 @@ from .answer import (
 )
 from .query import ParsedQuery, looks_like_scene_question, parse
 from .store import Store
-from .timeutil import DEFAULT_TIMEZONE, DateRange, iso_utc, venue_zone
+from .timeutil import DEFAULT_TIMEZONE, DateRange, iso_utc, parse_timestamp, venue_zone
 
 
 @dataclass
@@ -45,8 +45,10 @@ class ChatService:
         *,
         timezone_name: str = DEFAULT_TIMEZONE,
         now_provider=None,
+        media_url_for=None,
     ) -> None:
         self.store = store
+        self.media_url_for = media_url_for
         self.timezone_name = timezone_name
         self._now = now_provider or (lambda: datetime.now(timezone.utc))
 
@@ -97,6 +99,7 @@ class ChatService:
                 handover_note=note,
                 timezone_name=self.timezone_name,
                 footage_present=bool(coverage),
+                available_dates=self._available_dates(),
             )
         return ChatResult(parsed, answer, (time.perf_counter() - started) * 1000)
 
@@ -162,6 +165,26 @@ class ChatService:
                     end=None,
                 ))
 
+        observed = sum(float(w.get("coverage", {}).get("observed_seconds") or 0) for w in coverage)
+        requested = (date_range.end_utc - date_range.start_utc).total_seconds()
+        if observed < requested - 60:
+            zone = venue_zone(self.timezone_name)
+            spans = ", ".join(
+                f"{parse_timestamp(w['window_start']).astimezone(zone).strftime('%H:%M')}–"
+                f"{parse_timestamp(w['window_end']).astimezone(zone).strftime('%H:%M')}"
+                for w in coverage[:6]
+            )
+            minutes = observed / 60
+            amount = f"{minutes:.0f} minutes" if minutes >= 2 else f"{observed:.0f} seconds"
+            limitations.append(Limitation(
+                kind="unprocessed_period",
+                description=(
+                    f"Only {amount} of footage exist for the time you asked about "
+                    f"(within {spans}{'…' if len(coverage) > 6 else ''}). "
+                    "Anything outside that could not be checked."
+                ),
+            ))
+
         if parsed.assumed_date:
             limitations.append(Limitation(
                 kind="assumed_date",
@@ -189,6 +212,7 @@ class ChatService:
                 handover_note=handover_note,
                 timezone_name=self.timezone_name,
                 footage_present=False,
+                available_dates=self._available_dates(),
             )
         summaries = [w["scene_text"] for w in coverage if w.get("scene_text")]
         body = " ".join(summaries[:3]) if summaries else (
@@ -204,8 +228,31 @@ class ChatService:
             scope_statement=scope,
             handover_status=handover_status,
             handover_note=handover_note,
-            timezone_name=self.timezone_name,
+            timezone_used=self.timezone_name,
         )
+
+    def _available_dates(self) -> list[str]:
+        """Local calendar days that have processed footage, for a helpful
+        'no footage that day' answer."""
+        zone = venue_zone(self.timezone_name)
+        days: list[str] = []
+        for start, end in self.store.footage_spans():
+            if not start:
+                continue
+            first = parse_timestamp(start).astimezone(zone).date()
+            last = (parse_timestamp(end) - timedelta(seconds=1)).astimezone(zone).date()
+            day = first
+            while day <= last:
+                label = day.strftime("%d %B %Y").lstrip("0")
+                if label not in days:
+                    days.append(label)
+                day += timedelta(days=1)
+        return days[-8:]
+
+    def _media_for(self, source_id: str) -> str | None:
+        if self.media_url_for is None:
+            return None
+        return self.media_url_for(source_id)
 
     def _rank(self, rows, parsed: ParsedQuery) -> list[Match]:
         wanted_state = parsed.item_terms or parsed.colours
@@ -219,6 +266,10 @@ class ChatService:
 
             if row.state_at_event == "likely_unattended":
                 score += 0.2
+            elif row.state_at_event == "possibly_unattended":
+                score += 0.1
+            if parsed.item_terms and attrs.get("item_type") in parsed.item_terms:
+                score += 0.15
             if row.onset_certainty == "observed":
                 score += 0.1
             if available:
@@ -232,15 +283,21 @@ class ChatService:
                 row.event_time.astimezone(venue_zone(self.timezone_name)).strftime("%H:%M")
                 if row.event_time else "an unknown time"
             )
-            note = (
-                "left unattended" if row.state_at_event == "likely_unattended"
-                else "seen but not confirmed unattended"
-            )
-            scored.append((score, row, local, note, available, attrs))
+            note = {
+                "likely_unattended": "left unattended",
+                "possibly_unattended": "possibly left unattended",
+                "moved": "picked up or moved",
+            }.get(row.state_at_event, "seen but not confirmed unattended")
+            if attrs.get("item_type") is None:
+                note += ", item type unknown"
+            seek = evidence.get("seek_to_offset_s") if evidence else None
+            media = self._media_for(row.source_id) if available else None
+            caption = observation.get("caption_text")
+            scored.append((score, row, local, note, available, attrs, media, seek, caption))
 
         scored.sort(key=lambda item: (-item[0], item[2]))
         matches: list[Match] = []
-        for rank, (score, row, local, note, available, attrs) in enumerate(scored, start=1):
+        for rank, (score, row, local, note, available, attrs, media, seek, caption) in enumerate(scored, start=1):
             if score <= 0:
                 continue
             matches.append(Match(
@@ -259,5 +316,8 @@ class ChatService:
                 difference_note=note,
                 evidence_available=available,
                 local_time=local,
+                media_url=media,
+                seek_to_s=seek if seek is not None else row.event_offset_s,
+                caption=caption,
             ))
         return matches

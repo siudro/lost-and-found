@@ -48,14 +48,16 @@ This is not a promise written in a system prompt. It is enforced in the schema, 
 | Query parsing (synonyms, dates) | built |
 | Answer composition | built |
 | Storage (SQLite) | built |
-| Real video ingest (ffmpeg) | built, tested on generated clips |
+| Real video ingest: left-object detection (OpenCV, two background models) | built; scored on generated clips with exact ground truth (`tests/test_detector.py`) |
+| Upload, background processing, video playback at the moment found | built |
+| One-click real sample footage (CAVIAR, CC BY-SA) | built; downloaded by the server |
 | HTTP API + web interface | built |
 | Startup diagnostics | built |
-| Deployment | `Dockerfile` + `railway.json` (image build not yet run in this sandbox) |
+| Deployment | `Dockerfile` + `railway.json`, live on Railway, auto-deploys from `main` |
 | CAVIAR evaluation harness | **not built** |
 | SAM segmenter, captioner, LLM | declared in the registry, not wired |
 
-**77 tests, 0 failures. 140 schema checks, 0 failures.**
+**85 tests, 0 failures. 140 schema checks, 0 failures. 15/15 forbidden states rejected.**
 
 See `docs/running.md` for deployment, `docs/architecture.md` for the diagrams,
 `docs/datasets.md` for the honest dataset situation, and `docs/AGENTS.md` if you
@@ -64,7 +66,7 @@ are another agent picking this up.
 ## Layout
 
 ```
-app/core/   time, unattended, query, answer, store, pipeline, chat
+app/core/   time, unattended, query, answer, store, detector, pipeline, chat
 app/ai/     provider registry — what AI is needed, and what happens without it
 app/web/    web interface
 schemas/    7 JSON Schema contracts

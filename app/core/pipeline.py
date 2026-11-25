@@ -1,38 +1,56 @@
-"""Video ingest and the per-window analysis pipeline.
+"""Video ingest: from a video file to report windows, observations, events
+and evidence that the chat can search.
 
-This is the genuine processing path: it decodes real frames with ffmpeg,
-finds regions that stay put while people move around them, and turns those
-into ItemEvents.
+The pixels are read by ``detector.py`` (left-object detection with two
+background models). This module turns each item track into the shared data
+contract and judges it with the rule-based logic in ``unattended.py``.
 
-What it is not: a learned detector. It is a motion-and-stability model. On
-a staged clip of a jacket on a chair that is sufficient and honest; on a
-cluttered real classroom it will over-propose. The segmentation benchmark
-(WAI-269) replaces this with SAM-backed detection, and the interface is
-designed so that swap needs no change anywhere else.
+The three timestamps stay separate, as the contract requires:
+
+* ``first_seen_at`` — when the item's pixels first stopped changing, i.e.
+  when it was put down;
+* ``unattended_onset_estimate`` — from when nobody was near it;
+* ``confirmed_at`` — when it had been alone long enough to call it
+  "likely unattended". Confirmed minus onset is detection delay, never the
+  event time.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
+import os
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
+from zoneinfo import ZoneInfo
 
-from .timeutil import (
-    DEFAULT_TIMEZONE,
-    iso_utc,
-    offset_to_absolute,
-    parse_timestamp,
-    window_bounds,
-)
-from .unattended import State, Thresholds, TrackSample, infer
+from .detector import DetectionResult, DetectorConfig, DetectorError, ItemTrack, detect_left_items
+from .timeutil import DEFAULT_TIMEZONE, iso_utc, window_bounds
+from .unattended import Inference, State, Thresholds, TrackSample, infer
 
-FRAME_WIDTH = 320
-FRAME_HEIGHT = 180
+PIPELINE_VERSION = "leftobject_v2"
+CAPTIONER = "colour_and_position_v1"
+
+PERSON_LIKE_MOTION = 0.05
+"""A 'still' shape whose pixels keep moving this much is a person standing,
+not an item. Measured: bags ~0.00, a person standing still ~0.15."""
+
+
+def demo_thresholds() -> Thresholds:
+    """Unattended policy for ingested footage.
+
+    The library defaults (2 min still, 5 min alone) suit a real venue. Test
+    clips are a minute or two long, so ingest uses shorter, configurable
+    values: still for 10 s, alone for 15 s = possibly unattended, alone for
+    30 s = likely unattended.
+    """
+    return Thresholds(
+        stationary_seconds=float(os.environ.get("UNATTENDED_STATIONARY_S", 10)),
+        deserted_seconds=float(os.environ.get("UNATTENDED_DESERTED_S", 15)),
+    )
 
 
 class IngestError(RuntimeError):
@@ -52,6 +70,7 @@ class SourceSpec:
     media_path: str | None = None
     duration_seconds: float | None = None
     visibility: str = "internal_only"
+    playback_path: str | None = None
 
     def to_record(self) -> dict:
         return {
@@ -66,14 +85,11 @@ class SourceSpec:
                 iso_utc(self.recording_started_at) if self.recording_started_at else None
             ),
             "recording_ended_at": (
-                iso_utc(
-                    self.recording_started_at
-                    + timedelta(seconds=self.duration_seconds or 0)
-                )
+                iso_utc(self.recording_started_at + timedelta(seconds=self.duration_seconds))
                 if self.recording_started_at and self.duration_seconds
                 else None
             ),
-            "media_path": self.media_path,
+            "media_path": self.playback_path or self.media_path,
             "duration_seconds": self.duration_seconds,
             "access": {"visibility": self.visibility, "approved_by": None, "expires_at": None},
         }
@@ -102,122 +118,35 @@ def probe_duration(path: str | Path) -> float:
         capture_output=True, text=True, timeout=120,
     )
     if result.returncode != 0:
-        raise IngestError(f"ffprobe failed: {result.stderr.strip()[:300]}")
+        raise IngestError(f"ffprobe could not read this file: {result.stderr.strip()[:300]}")
     try:
         return float(result.stdout.strip())
     except ValueError as error:
-        raise IngestError(f"could not read duration from {path}") from error
+        raise IngestError(f"could not read the duration of {Path(path).name}") from error
 
 
-def extract_frames(
-    path: str | Path,
-    every_seconds: float,
-    tmpdir: Path,
-) -> list[tuple[float, Path]]:
-    """Decode frames every N seconds into raw RGB files.
+def make_playback_copy(source: str | Path, target: str | Path) -> Path:
+    """Re-encode to H.264 MP4 that every browser can play and seek.
 
-    Writes small PPM frames so no image library is required — the pipeline
-    stays dependency-light, which matters for a free deployment target.
+    Audio is dropped: the project keeps audio off by default.
     """
-    if every_seconds <= 0:
-        raise IngestError("sampling interval must be positive")
-    pattern = tmpdir / "frame_%05d.ppm"
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
-            "ffmpeg", "-v", "error", "-i", str(path),
-            "-vf", f"fps=1/{every_seconds},scale={FRAME_WIDTH}:{FRAME_HEIGHT}",
-            "-pix_fmt", "rgb24", str(pattern),
+            "ffmpeg", "-v", "error", "-y", "-i", str(source), "-an",
+            "-vf", "scale='min(960,iw)':-2", "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target),
         ],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True, text=True, timeout=1800,
     )
     if result.returncode != 0:
-        raise IngestError(f"ffmpeg frame extraction failed: {result.stderr.strip()[:300]}")
-
-    frames: list[tuple[float, Path]] = []
-    for index, frame_path in enumerate(sorted(tmpdir.glob("frame_*.ppm"))):
-        frames.append((index * every_seconds, frame_path))
-    if not frames:
-        raise IngestError("no frames decoded from the video")
-    return frames
-
-
-def read_ppm(path: Path) -> tuple[int, int, bytes]:
-    """Minimal PPM reader for the 8-bit RGB our own ffmpeg writes."""
-    data = path.read_bytes()
-    if not data.startswith(b"P6"):
-        raise IngestError(f"unexpected frame format in {path.name}")
-    parts = data.split(maxsplit=4)
-    if len(parts) < 5:
-        raise IngestError(f"truncated header in {path.name}")
-    width, height = int(parts[1]), int(parts[2])
-    return width, height, parts[4]
+        raise IngestError(f"could not prepare the video for playback: {result.stderr.strip()[:300]}")
+    return target
 
 
 # --------------------------------------------------------------------------
-# Motion analysis
-# --------------------------------------------------------------------------
-
-
-def frame_difference(a: bytes, b: bytes) -> list[int]:
-    """Absolute per-pixel luma difference, one value per pixel."""
-    step = 3 * 4  # sample every 4th pixel for speed
-    diffs: list[int] = []
-    for i in range(0, len(a) - 2, step):
-        la = (a[i] * 299 + a[i + 1] * 587 + a[i + 2] * 114) // 1000
-        lb = (b[i] * 299 + b[i + 1] * 587 + b[i + 2] * 114) // 1000
-        diffs.append(abs(la - lb))
-    return diffs
-
-
-def stable_regions(
-    diffs: list[int],
-    threshold: int = 12,
-) -> list[tuple[int, int]]:
-    """Contiguous runs of pixels that did not change.
-
-    A run is a candidate for a stationary object: steady across the frame
-    pair where everything else moved.
-    """
-    regions: list[tuple[int, int]] = []
-    start: int | None = None
-    for index, value in enumerate(diffs):
-        if value <= threshold:
-            if start is None:
-                start = index
-        else:
-            if start is not None and index - start >= 40:
-                regions.append((start, index))
-            start = None
-    if start is not None and len(diffs) - start >= 40:
-        regions.append((start, len(diffs)))
-    return regions
-
-
-def dominant_colour(rgb: bytes, offset: int) -> str:
-    """Cheap colour naming from one sampled pixel. Deliberately coarse."""
-    if offset + 2 >= len(rgb):
-        return "unknown"
-    r, g, b = rgb[offset], rgb[offset + 1], rgb[offset + 2]
-    high, low = max(r, g, b), min(r, g, b)
-    if high - low < 25:
-        if high < 60:
-            return "black"
-        if high > 200:
-            return "white"
-        return "gray"
-    if r >= g and r >= b:
-        if g > b + 40:
-            return "orange"
-        return "red" if g < 100 else "brown"
-    if g >= r and g >= b:
-        return "green" if g > 100 else "olive"
-    if b > r + 30:
-        return "navy blue" if b < 140 else "blue"
-    return "gray"
-
-
-# --------------------------------------------------------------------------
-# Pipeline
+# Results
 # --------------------------------------------------------------------------
 
 
@@ -237,225 +166,321 @@ class WindowResult:
         }
 
 
-def analyse_window(
-    source: SourceSpec,
-    frames: list[tuple[float, Path]],
-    window_start_offset: float,
-    *,
-    thresholds: Thresholds | None = None,
-    window_minutes: int = 10,
-    scene_text: str | None = None,
-) -> WindowResult:
-    """Turn a block of decoded frames into observations, events and evidence."""
-    if not frames:
-        raise IngestError("no frames to analyse")
-
-    first_rgb = read_ppm(frames[0][1])[2]
-    samples: list[TrackSample] = []
-    colour_votes: dict[str, int] = {}
-    region_centres: list[tuple[float, float]] = []
-
-    for offset, frame_path in frames:
-        width, height, rgb = read_ppm(frame_path)
-        diffs = frame_difference(first_rgb, rgb)
-        regions = stable_regions(diffs)
-        if regions:
-            start, end = max(regions, key=lambda r: r[1] - r[0])
-            centre_index = (start + end) // 2
-            samples.append(
-                TrackSample(
-                    offset_s=window_start_offset + offset,
-                    position=(float(centre_index % (frame_difference_width(diffs))), 0.0),
-                    nearest_person_distance_ratio=None,
-                    visible=True,
-                )
-            )
-            region_centres.append((float(start), float(end)))
-            colour = dominant_colour(rgb, centre_index * 12)
-            colour_votes[colour] = colour_votes.get(colour, 0) + 1
-        else:
-            samples.append(
-                TrackSample(
-                    offset_s=window_start_offset + offset,
-                    position=region_centres[-1] if region_centres else (0.0, 0.0),
-                    nearest_person_distance_ratio=None,
-                    visible=False,
-                )
-            )
-
-    primary_colour = (
-        max(colour_votes, key=lambda k: colour_votes[k]) if colour_votes else None
-    )
-    present_at_start = frames[0][0] == 0.0
-
-    verdict = infer(
-        samples,
-        is_worn=False,
-        present_at_clip_start=present_at_start,
-        thresholds=thresholds,
-        frame_width=float(frame_difference_width(frame_difference(first_rgb, first_rgb)) or 1),
-    )
-
-    abs_start = offset_to_absolute(window_start_offset, source.recording_started_at)
-    if abs_start is None:
-        raise IngestError("source has no recording start time; cannot place events in time")
-    win_start, win_end = window_bounds(abs_start, window_minutes)
-
-    content_basis = f"{source.source_id}:{iso_utc(win_start)}:{len(frames)}"
-    content_hash = "sha256:" + hashlib.sha256(content_basis.encode()).hexdigest()[:32]
-
-    window_id = make_window_id(source.source_id, win_start)
-    observation_id = f"obs_{source.source_id[4:]}_{int(window_start_offset):06d}"
-    event_id = f"evt_{source.source_id[4:]}_{int(window_start_offset):06d}_{verdict.state.value}"
-    evidence_id = f"evd_{source.source_id[4:]}_{int(window_start_offset):06d}"
-
-    event_time = abs_start
-    clip_start = max(0.0, window_start_offset - 30)
-    clip_end = window_start_offset + 30
-    if source.duration_seconds:
-        clip_end = min(clip_end, source.duration_seconds)
-
-    observation = {
-        "observation_id": observation_id,
-        "source_id": source.source_id,
-        "camera_id": source.camera_id,
-        "track_ref": f"motion_v1:{content_hash[:16]}",
-        "first_frame_offset_s": window_start_offset,
-        "last_frame_offset_s": window_start_offset + (frames[-1][0] or 0),
-        "first_seen_at": iso_utc(abs_start),
-        "is_worn": False,
-        "state": verdict.state.value,
-        "unattended_onset_estimate": (
-            iso_utc(abs_start + timedelta(seconds=verdict.deserted_since_s or 0))
-            if verdict.deserted_since_s is not None
-            and verdict.state in (State.POSSIBLY_UNATTENDED, State.LIKELY_UNATTENDED)
-            else None
-        ),
-        "onset_certainty": verdict.onset_certainty.value,
-        "confirmed_at": (
-            iso_utc(abs_start + timedelta(seconds=frames[-1][0]))
-            if verdict.state is State.LIKELY_UNATTENDED
-            else None
-        ),
-        "confidence": verdict.confidence,
-        "uncertainty": verdict.uncertainty,
-        "attributes": {
-            "item_type": "object",
-            "primary_color": primary_colour,
-            "secondary_color": None,
-            "visible_features": [],
-            "location_label": source.location_label,
-        },
-        "caption_text": (
-            f"A {primary_colour or 'unidentified'} object remained still in view "
-            f"from {abs_start.strftime('%H:%M')} for about "
-            f"{int(verdict.seconds_stationary)} seconds."
-        ),
-        "caption_version": "motion_captioner_v1",
-    }
-
-    event = {
-        "event_id": event_id,
-        "event_type": (
-            "unattended_onset_estimated"
-            if verdict.state in (State.POSSIBLY_UNATTENDED, State.LIKELY_UNATTENDED)
-            else "became_stationary" if verdict.state is State.STATIONARY
-            else "first_observed"
-        ),
-        "observation_id": observation_id,
-        "source_id": source.source_id,
-        "camera_id": source.camera_id,
-        "event_time_offset_s": window_start_offset,
-        "event_time": iso_utc(event_time),
-        "window_id": window_id,
-        "report_id": window_id.replace("win_", "rep_"),
-        "state_at_event": verdict.state.value,
-        "onset_certainty": verdict.onset_certainty.value,
-        "uncertainty": verdict.uncertainty,
-        "confidence": verdict.confidence,
-        "evidence_id": evidence_id,
-        "is_worn": False,
-        "note": "Detected by motion stability. " + ", ".join(verdict.rules_fired),
-    }
-
-    evidence = {
-        "evidence_id": evidence_id,
-        "event_id": event_id,
-        "source_id": source.source_id,
-        "camera_id": source.camera_id,
-        "clip_start_offset_s": clip_start,
-        "clip_end_offset_s": clip_end,
-        "clip_start_at": iso_utc(abs_start - timedelta(seconds=window_start_offset - clip_start)),
-        "clip_end_at": iso_utc(abs_start + timedelta(seconds=clip_end - window_start_offset)),
-        "window_id": window_id,
-        "seek_to_offset_s": window_start_offset,
-        "player_ref": f"player:{source.source_id}?t={int(window_start_offset)}",
-        "availability": "available",
-        "retention": {"retain_until": None},
-    }
-
-    window = {
-        "window_id": window_id,
-        "source_id": source.source_id,
-        "camera_id": source.camera_id,
-        "window_start": iso_utc(win_start),
-        "window_end": iso_utc(win_end),
-        "window_start_offset_s": window_start_offset,
-        "report_id": window_id.replace("win_", "rep_"),
-        "report_date": win_start.astimezone(
-            __import__("zoneinfo").ZoneInfo(source.timezone)
-        ).strftime("%Y-%m-%d"),
-        "coverage": {
-            "status": "full",
-            "observed_seconds": float(window_minutes * 60),
-            "expected_seconds": float(window_minutes * 60),
-            "gaps": [],
-        },
-        "scene_summary": {
-            "text": scene_text or (
-                f"Footage from {source.location_label or source.camera_id} between "
-                f"{win_start.strftime('%H:%M')} and {win_end.strftime('%H:%M')} UTC. "
-                f"An object that stayed still was detected and its stability was analysed."
-            ),
-            "caption_version": "motion_captioner_v1",
-        },
-        "event_ids": [event_id],
-        "observation_ids": [observation_id],
-        "sampling": {"base_interval_s": 1.0, "dense_interval_s": None, "dense_intervals": []},
-        "processing": {
-            "pipeline_version": "motion_v1",
-            "detector": "rule_based_detector",
-            "segmenter": None,
-            "captioner": "motion_captioner_v1",
-            "content_hash": content_hash,
-            "processed_at": iso_utc(datetime.now(timezone.utc)),
-        },
-    }
-
-    return WindowResult(window=window, observations=[observation], events=[event], evidence=[evidence])
-
-
-def frame_difference_width(diffs: list[int]) -> int:
-    """How many sampled columns a diff array represents."""
-    return len(diffs)
-
-
 def make_window_id(source_id: str, start: datetime) -> str:
     stamp = start.strftime("%Y%m%dT%H%M%SZ")
     return f"win_{source_id[4:]}_{stamp}"
 
 
+@dataclass
+class ItemReport:
+    """One item track, judged and placed in time."""
+
+    observation: dict
+    events: list[dict]
+    evidence: list[dict]
+    verdict: Inference
+    summary: str
+
+
+# --------------------------------------------------------------------------
+# Track -> contract
+# --------------------------------------------------------------------------
+
+
+def is_person_like(track: ItemTrack) -> bool:
+    return median(p.internal_motion for p in track.points) >= PERSON_LIKE_MOTION
+
+
+def _clock(local_tz: ZoneInfo, moment: datetime) -> str:
+    return moment.astimezone(local_tz).strftime("%H:%M:%S")
+
+
+def _judge(track: ItemTrack, thresholds: Thresholds, present_at_start: bool) -> Inference:
+    # The detector decides whether the item moved (by watching the empty
+    # background come back); here the position is held steady so box jitter
+    # from people walking in front is not mistaken for a pickup.
+    cx = median(p.centre[0] for p in track.points)
+    cy = median(p.centre[1] for p in track.points)
+    samples = [TrackSample(offset_s=track.placed_offset_s, position=(cx, cy),
+                           nearest_person_distance_ratio=0.0, visible=True)]
+    samples += [
+        TrackSample(
+            offset_s=p.offset_s,
+            position=(cx, cy),
+            nearest_person_distance_ratio=p.person_distance_ratio,
+            visible=True,
+        )
+        for p in track.points
+    ]
+
+    def judge(prefix: list[TrackSample]) -> Inference:
+        return infer(
+            prefix,
+            is_worn=False,
+            present_at_clip_start=present_at_start,
+            thresholds=thresholds,
+            frame_width=float(track.frame_size[0] or 1),
+        )
+
+    # The rules judge the end of whatever they are given. An item left alone
+    # for a minute and then collected would be judged at the moment of
+    # collection, with its owner beside it, and the minute alone would be
+    # lost. So judge the end of every spell alone, and the end of the
+    # track, and report the most serious reading.
+    def alone(sample: TrackSample) -> bool:
+        near = sample.nearest_person_distance_ratio
+        return near is None or near > thresholds.person_proximity_ratio
+
+    cuts = [
+        i for i in range(len(samples))
+        if i == len(samples) - 1 or (alone(samples[i]) and not alone(samples[i + 1]))
+    ]
+    severity = {
+        State.LIKELY_UNATTENDED: 4, State.POSSIBLY_UNATTENDED: 3,
+        State.STATIONARY: 2, State.SEEN: 1, State.UNCERTAIN: 0, State.MOVED: 0,
+    }
+    verdicts = [judge(samples[: i + 1]) for i in cuts]
+    return max(verdicts, key=lambda v: (severity[v.state], v.seconds_deserted))
+
+
+def build_item_report(
+    source: SourceSpec,
+    track: ItemTrack,
+    index: int,
+    thresholds: Thresholds,
+    window_minutes: int,
+) -> ItemReport:
+    assert source.recording_started_at is not None
+    start = source.recording_started_at
+    local_tz = ZoneInfo(source.timezone)
+    present_at_start = track.placed_offset_s <= 1.5
+    verdict = _judge(track, thresholds, present_at_start)
+
+    def at(offset: float) -> datetime:
+        return start + timedelta(seconds=offset)
+
+    colour = track.colour_name()
+    location = track.location_phrase()
+    if source.location_label:
+        location = f"{location} ({source.location_label})"
+
+    base = f"{source.source_id[4:]}_{index:03d}"
+    observation_id = f"obs_{base}"
+    unattended = verdict.state in (State.POSSIBLY_UNATTENDED, State.LIKELY_UNATTENDED)
+    onset_offset = verdict.deserted_since_s if unattended else None
+    confirmed_offset = (
+        verdict.deserted_since_s + 2 * thresholds.deserted_seconds
+        if verdict.state is State.LIKELY_UNATTENDED and verdict.deserted_since_s is not None
+        else None
+    )
+    removed = track.end_reason == "removed"
+    final_state = State.MOVED if removed else verdict.state
+
+    uncertainty = list(dict.fromkeys(verdict.uncertainty))
+    if track.end_reason == "lost":
+        uncertainty.append("occluded")
+    if track.frame_size[0] and track.frame_size[0] < 400:
+        uncertainty.append("low_resolution")
+    uncertainty.append("ambiguous_attributes")  # item type is never determined
+
+    seconds_alone = int(verdict.seconds_deserted)
+    pieces = [
+        f"An item ({colour or 'colour unclear'}) was put down {location} at "
+        f"{_clock(local_tz, at(track.placed_offset_s))}."
+    ]
+    if unattended:
+        pieces.append(
+            f"Nobody was near it from {_clock(local_tz, at(onset_offset))} "
+            f"(about {seconds_alone} s in total)."
+        )
+    elif verdict.state is State.STATIONARY:
+        pieces.append("Someone stayed near it.")
+    if removed:
+        pieces.append(f"It was picked up or moved at {_clock(local_tz, at(track.ended_offset_s))}.")
+    elif track.end_reason == "lost":
+        pieces.append("It later went out of view (something may be standing in front of it).")
+    else:
+        pieces.append("It was still there when the recording ended.")
+    caption = " ".join(pieces)
+
+    observation = {
+        "observation_id": observation_id,
+        "source_id": source.source_id,
+        "camera_id": source.camera_id,
+        "track_ref": f"{PIPELINE_VERSION}:{source.source_id}:{track.track_id}",
+        "first_frame_offset_s": round(track.placed_offset_s, 2),
+        "last_frame_offset_s": round(track.last_seen_offset_s, 2),
+        "first_seen_at": iso_utc(at(track.placed_offset_s)),
+        "is_worn": False,
+        "state": final_state.value,
+        "unattended_onset_estimate": iso_utc(at(onset_offset)) if onset_offset is not None else None,
+        "onset_certainty": verdict.onset_certainty.value,
+        "confirmed_at": iso_utc(at(confirmed_offset)) if confirmed_offset is not None else None,
+        "confidence": verdict.confidence,
+        "uncertainty": uncertainty,
+        "attributes": {
+            "item_type": None,
+            "primary_color": colour,
+            "secondary_color": None,
+            "visible_features": [],
+            "location_label": location,
+        },
+        "caption_text": caption,
+        "caption_version": CAPTIONER,
+    }
+
+    events: list[dict] = []
+    evidence: list[dict] = []
+
+    def add_event(kind: str, offset: float, state: State, certainty: str, note: str) -> None:
+        moment = at(offset)
+        win_start, _ = window_bounds(moment, window_minutes)
+        window_id = make_window_id(source.source_id, win_start)
+        event_id = f"evt_{base}_{kind}"
+        evidence_id = f"evd_{base}_{kind}"
+        clip_start = max(0.0, offset - 30)
+        clip_end = offset + 30
+        if source.duration_seconds:
+            clip_end = min(clip_end, source.duration_seconds)
+        events.append({
+            "event_id": event_id,
+            "event_type": kind,
+            "observation_id": observation_id,
+            "source_id": source.source_id,
+            "camera_id": source.camera_id,
+            "event_time_offset_s": round(offset, 2),
+            "event_time": iso_utc(moment),
+            "window_id": window_id,
+            "report_id": window_id.replace("win_", "rep_"),
+            "state_at_event": state.value,
+            "onset_certainty": certainty,
+            "uncertainty": uncertainty,
+            "confidence": verdict.confidence,
+            "evidence_id": evidence_id,
+            "is_worn": False,
+            "note": note,
+        })
+        evidence.append({
+            "evidence_id": evidence_id,
+            "event_id": event_id,
+            "source_id": source.source_id,
+            "camera_id": source.camera_id,
+            "clip_start_offset_s": round(clip_start, 2),
+            "clip_end_offset_s": round(clip_end, 2),
+            "clip_start_at": iso_utc(at(clip_start)),
+            "clip_end_at": iso_utc(at(clip_end)),
+            "window_id": window_id,
+            "seek_to_offset_s": round(offset, 2),
+            "player_ref": f"player:{source.source_id}?t={offset:.1f}",
+            "availability": "available",
+            "retention": {"retain_until": None},
+        })
+
+    rules = ", ".join(verdict.rules_fired)
+    if unattended:
+        add_event("unattended_onset_estimated", onset_offset, verdict.state,
+                  verdict.onset_certainty.value, f"{caption} Rules: {rules}.")
+    else:
+        add_event("became_stationary", track.placed_offset_s, verdict.state,
+                  "not_applicable", f"{caption} Rules: {rules}.")
+    if removed:
+        add_event("picked_up", track.ended_offset_s, State.MOVED, "observed",
+                  f"The empty background reappeared where the item had been. {caption}")
+
+    return ItemReport(observation, events, evidence, verdict, caption)
+
+
+def build_windows(
+    source: SourceSpec,
+    reports: list[ItemReport],
+    detection: DetectionResult,
+    window_minutes: int,
+) -> list[WindowResult]:
+    assert source.recording_started_at is not None and source.duration_seconds
+    start = source.recording_started_at
+    end = start + timedelta(seconds=source.duration_seconds)
+    local_tz = ZoneInfo(source.timezone)
+    window_seconds = window_minutes * 60
+    content_hash = "sha256:" + hashlib.sha256(
+        f"{source.source_id}:{source.duration_seconds}:{detection.frames_analysed}".encode()
+    ).hexdigest()[:32]
+
+    results: list[WindowResult] = []
+    cursor, _ = window_bounds(start, window_minutes)
+    while cursor < end:
+        win_start, win_end = cursor, cursor + timedelta(seconds=window_seconds)
+        overlap = (min(win_end, end) - max(win_start, start)).total_seconds()
+        window_id = make_window_id(source.source_id, win_start)
+        events = [e for r in reports for e in r.events if e["window_id"] == window_id]
+        evidence = [d for r in reports for d in r.evidence if d["window_id"] == window_id]
+        observation_ids = sorted({e["observation_id"] for e in events})
+        observations = [r.observation for r in reports if r.observation["observation_id"] in observation_ids]
+
+        span = (
+            f"{max(win_start, start).astimezone(local_tz).strftime('%H:%M')}–"
+            f"{min(win_end, end).astimezone(local_tz).strftime('%H:%M')}"
+        )
+        place = source.location_label or source.camera_id
+        if observations:
+            body = " ".join(r.summary for r in reports if r.observation["observation_id"] in observation_ids)
+            text = f"Footage from {place}, {span} ({source.timezone}). {body}"
+        else:
+            text = (
+                f"Footage from {place}, {span} ({source.timezone}). "
+                "No item was put down and left in this part of the recording."
+            )
+        text += " Items already in place when the recording began cannot be detected."
+        offset = (win_start - start).total_seconds()
+
+        results.append(WindowResult(
+            window={
+                "window_id": window_id,
+                "source_id": source.source_id,
+                "camera_id": source.camera_id,
+                "window_start": iso_utc(win_start),
+                "window_end": iso_utc(win_end),
+                "window_start_offset_s": offset if offset >= 0 else None,
+                "report_id": window_id.replace("win_", "rep_"),
+                "report_date": win_start.astimezone(local_tz).strftime("%Y-%m-%d"),
+                "coverage": {
+                    "status": "full" if overlap >= window_seconds - 1 else "partial",
+                    "observed_seconds": round(max(0.0, overlap), 1),
+                    "expected_seconds": float(window_seconds),
+                    "gaps": [],
+                },
+                "scene_summary": {"text": text, "caption_version": CAPTIONER},
+                "event_ids": [e["event_id"] for e in events],
+                "observation_ids": observation_ids,
+                "sampling": {"base_interval_s": 0.2, "dense_interval_s": None, "dense_intervals": []},
+                "processing": {
+                    "pipeline_version": PIPELINE_VERSION,
+                    "detector": "dual_background_left_object",
+                    "segmenter": None,
+                    "captioner": CAPTIONER,
+                    "content_hash": content_hash,
+                    "processed_at": iso_utc(datetime.now(timezone.utc)),
+                },
+            },
+            observations=observations,
+            events=events,
+            evidence=evidence,
+        ))
+        cursor = win_end
+    return results
+
+
 def run_pipeline(
     source: SourceSpec,
     *,
-    sampling_seconds: float = 1.0,
     window_minutes: int = 10,
     thresholds: Thresholds | None = None,
+    detector_config: DetectorConfig | None = None,
     progress=None,
+    sampling_seconds: float | None = None,
 ) -> list[WindowResult]:
-    """Process a whole source, window by window.
+    """Process a whole recording.
 
-    Raises IngestError for undecodable video or a source with no wall clock —
+    Raises IngestError for undecodable video or a source with no wall clock;
     both are things the user must be told, not papered over.
     """
     if not source.media_path:
@@ -469,31 +494,33 @@ def run_pipeline(
             "answered without a wall clock"
         )
 
+    config = detector_config or DetectorConfig()
+    if sampling_seconds:
+        config = DetectorConfig(**{**config.__dict__, "sample_fps": 1.0 / sampling_seconds})
+    policy = thresholds or demo_thresholds()
+
     duration = source.duration_seconds or probe_duration(media)
     source.duration_seconds = duration
-    window_seconds = window_minutes * 60
-    results: list[WindowResult] = []
+    try:
+        detection = detect_left_items(media, config, progress=progress)
+    except DetectorError as error:
+        raise IngestError(str(error)) from error
+    if progress:
+        progress(f"decoded {detection.frames_analysed} frames from {media.name}")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpdir = Path(tmp)
-        frames = extract_frames(media, sampling_seconds, tmpdir)
+    tracks = [t for t in detection.tracks if not is_person_like(t)]
+    skipped = len(detection.tracks) - len(tracks)
+    if progress and skipped:
+        progress(f"ignored {skipped} still shape(s) that moved like a person")
+
+    reports = [
+        build_item_report(source, track, index, policy, window_minutes)
+        for index, track in enumerate(tracks, start=1)
+    ]
+    for report in reports:
         if progress:
-            progress(f"decoded {len(frames)} frames from {media.name}")
-
-        for index in range(0, len(frames), max(1, int(window_seconds / sampling_seconds))):
-            chunk = frames[index:index + max(1, int(window_seconds / sampling_seconds))]
-            if not chunk:
-                continue
-            start_offset = chunk[0][0]
-            result = analyse_window(
-                source, chunk, start_offset,
-                thresholds=thresholds, window_minutes=window_minutes,
-            )
-            results.append(result)
-            if progress:
-                progress(
-                    f"window {len(results)}: {result.window['window_id']} "
-                    f"state={result.observations[0]['state']}"
-                )
-
-    return results
+            progress(report.summary)
+    windows = build_windows(source, reports, detection, window_minutes)
+    if progress:
+        progress(f"{len(reports)} item(s) found across {len(windows)} report window(s)")
+    return windows

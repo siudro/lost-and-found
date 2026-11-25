@@ -41,6 +41,9 @@ class Match:
     difference_note: str
     evidence_available: bool
     local_time: str
+    media_url: str | None = None
+    seek_to_s: float | None = None
+    caption: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +63,9 @@ class Match:
             "location_label": self.location_label,
             "difference_note": self.difference_note,
             "evidence_available": self.evidence_available,
+            "media_url": self.media_url,
+            "seek_to_s": self.seek_to_s,
+            "caption": self.caption,
         }
 
 
@@ -143,11 +149,13 @@ def compose_matches(
 
     lines: list[str] = []
     best = matches[0]
-    state_word = (
-        "was left unattended" if best.state == "likely_unattended"
-        else "appears in the footage"
-    )
-    item = best.item_type or "object"
+    state_word = {
+        "likely_unattended": "was left unattended",
+        "possibly_unattended": "may have been left unattended (nobody was near it for a while)",
+        "moved": "was later picked up or moved",
+        "stationary": "was put down with someone staying near it",
+    }.get(best.state, "appears in the footage")
+    item = best.item_type or "item"
     colour = f"{best.colour} " if best.colour else ""
     where = f" {best.location_label}" if best.location_label else ""
     article = "an" if (colour or item)[0].lower() in "aeiou" else "a"
@@ -158,6 +166,12 @@ def compose_matches(
         f"{colour}{item}{where} at {best.local_time} that {state_word}."
     )
 
+    if best.item_type is None:
+        lines.append(
+            "The system can tell an item's colour and where it was, but not what "
+            "kind of item it is, so watch the clip to check whether it is yours."
+        )
+
     if best.onset_certainty == "uncertain":
         lines.append(
             "It was already there when the recording started, so when it was "
@@ -165,8 +179,8 @@ def compose_matches(
         )
     elif best.onset_certainty == "inferred":
         lines.append(
-            "Nobody was seen leaving it; the unattended reading is inferred "
-            "from how long it sat still with no one nearby."
+            "The unattended reading is inferred from how long it sat still "
+            "with no one nearby; the footage cannot show whose it was."
         )
 
     if len(matches) > 1:
@@ -204,6 +218,7 @@ def compose_no_match(
     handover_note: str,
     timezone_name: str,
     footage_present: bool,
+    available_dates: list[str] | None = None,
 ) -> Answer:
     """Answer when nothing matched.
 
@@ -230,6 +245,15 @@ def compose_no_match(
 
     if limitations:
         body += " " + " ".join(l.description for l in limitations)
+
+    if not footage_present:
+        if available_dates:
+            body += (
+                " Footage has been processed for: " + ", ".join(available_dates)
+                + ". Ask about one of those days, or upload footage for the day you need."
+            )
+        else:
+            body += " No footage has been uploaded yet. Upload a video to search it."
 
     return Answer(
         answer_mode=mode,

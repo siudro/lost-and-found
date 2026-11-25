@@ -134,27 +134,18 @@ def test_windows_tile_without_overlap_or_hole():
 
 @pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not installed")
 def test_pipeline_processes_a_real_generated_clip(tmp_path):
-    """Generate a clip with a stationary object and prove the pipeline reads it.
+    """Real encoded video, real ffmpeg decode, all the way to stored, searchable events.
 
-    This is the genuine ingest path: real H.264, real ffmpeg decode, real
-    frame analysis. It does not test the detector's accuracy — only that the
-    plumbing carries real pixels all the way to a stored event.
+    The clip has an exact answer: a gray bag put down about 6 s in, owner
+    gone by 14 s, bag still there at 60 s. Accuracy across scenarios is in
+    test_detector.py; this proves the plumbing carries it to the chat.
     """
-    clip = tmp_path / "stationary.mp4"
-    result = subprocess.run(
-        [
-            "ffmpeg", "-v", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=gray:s=320x180:d=6",
-            "-vf", "drawbox=x=140:y=80:w=40:h=30:color=red@1:t=fill",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip),
-        ],
-        capture_output=True, text=True, timeout=120,
-    )
-    if result.returncode != 0:
-        pytest.skip(f"ffmpeg could not synthesise a test clip: {result.stderr[:120]}")
+    from tests.scenes import left_behind
 
-    assert probe_duration(clip) > 5
+    clip = left_behind(tmp_path / "left.mp4")
+    assert probe_duration(clip) > 50
 
+    started = datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc)
     source = SourceSpec(
         source_id="src_test_clip",
         camera_id="cam_test",
@@ -162,20 +153,35 @@ def test_pipeline_processes_a_real_generated_clip(tmp_path):
         kind="replay",
         clock="source_clock",
         location_label="synthetic test scene",
-        recording_started_at=datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc),
+        recording_started_at=started,
         media_path=str(clip),
     )
     log: list[str] = []
-    results = run_pipeline(source, sampling_seconds=1.0, progress=log.append)
+    results = run_pipeline(source, progress=log.append)
 
     assert results, "pipeline produced no windows"
     assert any("decoded" in line for line in log)
-    first = results[0]
-    assert first.window["window_id"].startswith("win_")
-    assert first.observations
-    assert first.events
-    assert first.evidence
-    assert first.observations[0]["state"]
+    observations = [o for r in results for o in r.observations]
+    assert len(observations) == 1
+    assert observations[0]["state"] == "likely_unattended"
+    assert observations[0]["attributes"]["primary_color"] == "gray"
+
+    db = Store(tmp_path / "ingest.db")
+    db.upsert_source(source.to_record())
+    for result in results:
+        db.upsert_window(result.window)
+        for record in result.observations:
+            db.upsert_observation(record)
+        for record in result.events:
+            db.upsert_event(record)
+        for record in result.evidence:
+            db.upsert_evidence(record)
+    service = ChatService(db, now_provider=lambda: started + timedelta(hours=1))
+    answer = service.ask("Have you seen a grey bag today?").answer
+    assert answer.answer_mode == "matches_found"
+    assert answer.matches[0].colour == "gray"
+    assert answer.matches[0].item_type is None
+    assert "not what kind of item" in answer.body
 
 
 @pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not installed")

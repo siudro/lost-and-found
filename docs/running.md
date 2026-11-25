@@ -148,9 +148,27 @@ python tests/test_rules_catch_violations.py  # 15/15 forbidden states rejected
 | GET | `/api/providers` | which AI is configured, and what happens without it |
 | GET | `/api/stats` | row counts and sources |
 
+# Testing with footage
+
+On the home page:
+
+1. **Add footage.** Upload a video, or click one of the real CAVIAR sample clips (the server downloads it). Processing runs in the background and the page shows progress. Uploads are limited to `MAX_UPLOAD_MB` (default 500). A playback copy (H.264, no audio) is kept on the volume under `media/`.
+2. **Ask.** Example questions update to the day of the newest footage. Each match has a video player that jumps to the moment.
+
+Good test footage: a phone on a shelf, not moving, filming a room. Someone puts a bag or jacket down, stays a few seconds, walks out of view, and the camera keeps recording for at least 30 more seconds.
+
+Unattended thresholds for ingested footage (environment variables): `UNATTENDED_STATIONARY_S` (default 10), `UNATTENDED_DESERTED_S` (default 15; alone this long = possibly unattended, twice this long = likely unattended).
+
+# How the detector works
+
+`app/core/detector.py` keeps two background models of the scene. The long one remembers the empty room; the short one catches up within about a second. Pixels that differ from the long model but already match the short one belong to something that arrived and stopped moving. Those are grouped into items and tracked, and for every moment the distance to the nearest moving person is recorded. `pipeline.py` then judges each track with the rules in `unattended.py`, keeping first-seen, onset and confirmation times separate.
+
 # Known limits
 
-- The default detector is motion-based, not learned. It works on a staged jacket clip; on a cluttered classroom it over-proposes.
-- No SAM or captioner enabled by default, so descriptions come from a coarse colour estimate.
+- The detector does not know what an item is. The item type is reported as unknown, and answers say so and point to the clip.
+- Anything already in view when the recording starts becomes part of the background and is not detected.
+- A person who stands completely still can look like an item; shapes whose pixels keep moving like a person's are ignored, but not every case is caught.
+- The camera must not move. A large sudden change (camera bumped, lights switched) rebuilds the background, and any items being tracked at that moment are dropped.
+- No SAM or captioner enabled by default, so descriptions come from colour and position in the frame.
 - Demo fixtures are hand-written to exercise the contract, not captured from real footage.
 - No live camera ingest — recorded upload and replay only.
