@@ -99,6 +99,18 @@ async function ask() {
   }
 }
 
+function humanState(state) {
+  const map = {
+    likely_unattended: 'left unattended',
+    possibly_unattended: 'possibly left alone',
+    stationary: 'standing still',
+    seen: 'seen in footage',
+    moved: 'moved later',
+    uncertain: 'uncertain',
+  };
+  return map[state] || String(state || '').replace(/_/g, ' ');
+}
+
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -109,8 +121,7 @@ function render(a, parsed) {
 
   for (const m of a.matches || []) {
     html += `<div class="match"><b>${esc(m.local_time)} — ${esc(m.colour || '')} ${esc(m.item_type || 'item')}</b>
-      <div class="meta">${esc(m.location_label || 'location not recorded')} · ${esc(m.state_claim)}
-      ${m.onset_certainty === 'uncertain' ? ' · onset unknown (present at clip start)' : ''}</div>
+      <div class="meta">${esc(m.location_label || 'location not recorded')} · ${esc(m.state_claim === 'likely_unattended' ? 'left unattended' : 'seen in footage')}${m.onset_certainty === 'uncertain' ? ' · onset unknown (present at clip start)' : ''}</div>
       ${m.evidence_available ? `<div class="meta">Evidence clip available — seek to ${Math.round(m.event_offset_s)}s</div>`
                              : `<div class="warn">Evidence unavailable for this event.</div>`}</div>`;
   }

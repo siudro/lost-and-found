@@ -51,7 +51,7 @@ This is not a promise written in a system prompt. It is enforced in the schema, 
 | Real video ingest (ffmpeg) | built, tested on generated clips |
 | HTTP API + web interface | built |
 | Startup diagnostics | built |
-| Railway deploy config | configured, not yet deployed |
+| Deployment | `Dockerfile` + `railway.json` (image build not yet run in this sandbox) |
 | CAVIAR evaluation harness | **not built** |
 | SAM segmenter, captioner, LLM | declared in the registry, not wired |
 

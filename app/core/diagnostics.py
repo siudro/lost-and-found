@@ -147,6 +147,19 @@ def check_schemas(report: Report) -> None:
     report.add(Check("schemas", True, f"{len(expected)} contracts load"))
 
 
+def display_path(path: str) -> str:
+    """Show a recognisable location without leaking the host filesystem.
+
+    A deployment log should say 'the configured volume' rather than the
+    absolute path of whoever built the image.
+    """
+    if path.startswith("/data/"):
+        return "mounted volume"
+    if path.endswith("foundit.db"):
+        return "local ./data/foundit.db"
+    return "configured path"
+
+
 def check_storage(report: Report) -> None:
     path = os.environ.get("DATABASE_PATH", str(ROOT / "data" / "foundit.db"))
     try:
@@ -157,9 +170,9 @@ def check_storage(report: Report) -> None:
         connection.execute("DROP TABLE _probe")
         connection.commit()
         connection.close()
-        report.add(Check("storage", True, f"sqlite writable at {path}"))
+        report.add(Check("storage", True, f"sqlite writable ({display_path(path)})"))
     except Exception as error:  # noqa: BLE001 - surface any storage failure
-        report.add(Check("storage", False, f"unusable at {path}: {error}", fatal=True))
+        report.add(Check("storage", False, f"unusable ({display_path(path)}): {error}", fatal=True))
 
 
 def check_fixtures(report: Report) -> None:

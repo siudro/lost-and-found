@@ -1,0 +1,36 @@
+# Build context hygiene. Without this, the image copies the local database,
+# the virtualenv and every __pycache__ into production.
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.venv/
+venv/
+env/
+ENV/
+
+data/
+*.db
+*.db-journal
+*.sqlite3
+
+.env
+.env.local
+*.pem
+
+media/
+models/
+outputs/
+out/
+
+.git/
+.gitignore
+.github/
+
+*.log
+.DS_Store
