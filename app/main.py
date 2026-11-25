@@ -499,6 +499,7 @@ def footage_tracks(source_id: str):
                 "bbox": t.bbox,
                 "person_like": is_person_like(t),
                 "motion_median": round(median(p.internal_motion for p in t.points), 3),
+                "surround_activity": round(t.surround_activity, 3),
                 "distance": [
                     [round(p.offset_s, 1), None if p.person_distance_ratio is None else round(p.person_distance_ratio, 3)]
                     for p in t.points[::5]
