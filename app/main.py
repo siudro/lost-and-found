@@ -397,6 +397,12 @@ SAMPLES = {
 }
 
 
+def sample_original(sample_id: str) -> Path:
+    """Downloaded CAVIAR originals are kept (13–17 MB each) so re-runs and
+    diagnostics use exactly the pixels the detector saw."""
+    return media_dir() / "samples" / f"{sample_id}.mpg"
+
+
 @app.get("/api/samples")
 def samples():
     return {
@@ -418,17 +424,24 @@ def ingest_sample(sample_id: str):
     path, title = SAMPLES[sample_id]
 
     def work(log):
-        incoming = media_dir() / "incoming"
-        incoming.mkdir(parents=True, exist_ok=True)
-        target = incoming / f"{sample_id}_{secrets.token_hex(3)}.mpg"
-        try:
+        cached = sample_original(sample_id)
+        if not cached.exists():
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            partial = cached.with_suffix(".part")
             log("downloading the sample clip from the CAVIAR archive")
             request = urllib.request.Request(f"{CAVIAR_BASE}/{path}", headers={"User-Agent": "FoundIt/0.2"})
             try:
-                with urllib.request.urlopen(request, timeout=120) as response, target.open("wb") as handle:
+                with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as handle:
                     shutil.copyfileobj(response, handle)
+                partial.replace(cached)
             except (urllib.error.URLError, TimeoutError, OSError) as error:
+                partial.unlink(missing_ok=True)
                 raise HTTPException(status_code=502, detail=f"could not download the sample clip: {error}") from error
+        incoming = media_dir() / "incoming"
+        incoming.mkdir(parents=True, exist_ok=True)
+        target = incoming / f"{sample_id}_{secrets.token_hex(3)}.mpg"
+        shutil.copyfile(cached, target)
+        try:
             return ingest_file(
                 target,
                 source_id=_new_source_id(f"caviar_{sample_id}"),
@@ -463,9 +476,14 @@ def footage_tracks(source_id: str):
     path = media_dir() / f"{source_id}.mp4"
     if not SOURCE_ID.match(source_id) or not path.exists():
         raise HTTPException(status_code=404, detail="no playback copy for that footage")
+    analysed = "playback copy"
+    for sample_id in SAMPLES:
+        if source_id.startswith(f"src_caviar_{sample_id}_") and sample_original(sample_id).exists():
+            path, analysed = sample_original(sample_id), "original sample file"
     with WORKER:
         result = detect_left_items(path)
     return {
+        "analysed": analysed,
         "frames": result.frames_analysed,
         "frame_size": result.frame_size,
         "ghosts_healed": result.ghosts_healed,
@@ -489,6 +507,22 @@ def footage_tracks(source_id: str):
             for t in result.tracks
         ],
     }
+
+
+@app.delete("/api/footage/{source_id}")
+def delete_footage(source_id: str):
+    """Delete a recording, its playback copy and every record derived from it."""
+    if not SOURCE_ID.match(source_id) or source_id.startswith("src_demo"):
+        raise HTTPException(status_code=400, detail="that footage cannot be deleted here")
+    store = get_store()
+    try:
+        removed = store.delete_source(source_id)
+    finally:
+        store.close()
+    (media_dir() / f"{source_id}.mp4").unlink(missing_ok=True)
+    if not removed:
+        raise HTTPException(status_code=404, detail="no such footage")
+    return {"deleted": source_id, "records_removed": removed}
 
 
 @app.get("/api/footage")

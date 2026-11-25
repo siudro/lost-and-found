@@ -465,3 +465,13 @@ class Store:
                GROUP BY source_id ORDER BY s"""
         ).fetchall()
         return [(r["s"], r["e"]) for r in rows]
+
+    def delete_source(self, source_id: str) -> int:
+        """Remove a recording and everything derived from it. Returns rows removed."""
+        removed = 0
+        with self.transaction() as conn:
+            for table in ("evidence", "events", "observations", "windows", "ingest_log", "sources"):
+                removed += conn.execute(
+                    f"DELETE FROM {table} WHERE source_id = ?", (source_id,)
+                ).rowcount
+        return removed

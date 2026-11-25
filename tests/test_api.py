@@ -157,3 +157,29 @@ def test_question_about_a_day_without_footage_names_days_that_have_it(client):
     ).json()["answer"]
     if answer["answer_mode"] == "footage_not_available":
         assert "20 November 2026" in answer["body"]
+
+
+def test_footage_can_be_deleted_but_demo_records_cannot(client, tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.pipeline import ffmpeg_available
+    from tests.scenes import passers_by
+
+    if not ffmpeg_available():
+        pytest.skip("ffmpeg not installed")
+    clip = passers_by(tmp_path / "walk.mp4")
+    with clip.open("rb") as handle:
+        job_id = client.post(
+            "/api/ingest",
+            files={"file": ("walk.mp4", handle, "video/mp4")},
+            data={"recorded_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()},
+        ).json()["job_id"]
+    job = _wait(client, job_id)
+    assert job["status"] == "done", job["error"]
+    source_id = job["result"]["source_id"]
+    assert client.get(job["result"]["media_url"]).status_code == 200
+
+    assert client.delete(f"/api/footage/{source_id}").status_code == 200
+    assert client.get(job["result"]["media_url"]).status_code == 404
+    assert all(f["source_id"] != source_id for f in client.get("/api/footage").json()["footage"])
+    assert client.delete("/api/footage/src_demo_classroom").status_code == 400

@@ -146,3 +146,38 @@ def busy_start(out: Path) -> Path:
     leaver = Person([(8, 420, 240), (12, 260, 240), (15, 260, 240), (20, 420, 240)])
     bag = Item(placed_at=12, removed_at=None, x=270, y=222, w=14, h=10, colour=(35, 35, 40))
     return render(out, 50, [stander, walker, leaver], [bag], carried_by={0: 2})
+
+
+def sunlight(out: Path) -> Path:
+    """A soft-edged patch of floor brightens over three seconds (sun through
+    a window) and stays bright; another darkens (a shadow). Separately a
+    dark bag is left at ~10 s. Only the bag is an item."""
+    rng = np.random.default_rng(3)
+    room = _room(rng)
+    leaver = Person([(5, 420, 250), (10, 250, 250), (13, 250, 250), (18, 420, 250)])
+    bag = Item(placed_at=10, removed_at=None, x=262, y=226, w=18, h=13, colour=(40, 35, 35))
+    # Window light has soft edges at this distance: blur the patches.
+    light = np.zeros((H, W), np.float32)
+    light[150:220, 60:150] = 0.35    # sun patch
+    light[100:140, 200:260] = -0.30  # shadow
+    light = cv2.GaussianBlur(light, (31, 31), 0)
+    writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
+    for n in range(int(45 * FPS)):
+        t = n / FPS
+        frame = room.copy()
+        k = min(1.0, max(0.0, (t - 15) / 3))
+        frame *= (1 + k * light)[..., None]
+        if t >= bag.placed_at:
+            cv2.rectangle(frame, (bag.x, bag.y), (bag.x + bag.w, bag.y + bag.h), bag.colour, -1)
+        where = leaver.where(t)
+        if where:
+            px, py = where
+            if t < bag.placed_at:
+                cv2.rectangle(frame, (int(px + 14), int(py - 30)), (int(px + 32), int(py - 17)), bag.colour, -1)
+            cx = int(px + 2.5 * np.sin(t * 3.1))
+            cv2.ellipse(frame, (cx, int(py - 40)), (13, 38), 0, 0, 360, leaver.colour, -1)
+            cv2.circle(frame, (cx, int(py - 86)), 9, (90, 120, 170), -1)
+        frame = frame + rng.normal(0, 4, frame.shape)
+        writer.write(np.clip(frame, 0, 255).astype(np.uint8))
+    writer.release()
+    return out
