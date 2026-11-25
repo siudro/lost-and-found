@@ -94,3 +94,11 @@ def test_people_walking_past_leave_nothing(tmp_path):
     (window,) = data["report_windows.json"]
     assert window["coverage"]["status"] == "partial"
     assert window["coverage"]["observed_seconds"] == pytest.approx(25, abs=1)
+
+
+def test_people_in_shot_at_the_start_do_not_become_items(tmp_path):
+    data = _run(tmp_path, scenes.busy_start)
+    (obs,) = data["observations.json"]           # only the real bag
+    assert obs["attributes"]["primary_color"] == "black"
+    assert abs(_seconds(obs["first_seen_at"]) - 12) <= 2
+    assert obs["state"] in {"possibly_unattended", "likely_unattended"}

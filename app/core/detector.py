@@ -44,8 +44,10 @@ class DetectorConfig:
     sample_fps: float = 5.0
     """Frames analysed per second. Five is plenty for objects that sit still."""
 
-    work_width: int = 320
-    """Frames are shrunk to this width before analysis."""
+    work_width: int = 480
+    """Frames wider than this are shrunk to it. Smaller videos keep their
+    size: low-resolution footage (CAVIAR is 384 px wide) cannot afford to
+    lose pixels when a bag is only a dozen pixels across."""
 
     diff_threshold: float = 30.0
     """Colour distance (0–441) above which a pixel differs from a background."""
@@ -53,8 +55,11 @@ class DetectorConfig:
     static_seconds: float = 3.0
     """How long a pixel must stay changed-but-still before it counts as an item."""
 
-    bg_init_seconds: float = 1.0
-    """Frames at the start used to build the first picture of the empty room."""
+    bg_init_seconds: float = 8.0
+    """The first picture of the empty room is the per-pixel median of this
+    many seconds. People walking through are removed by the median; with a
+    single first frame, every spot where someone stood became a fake item
+    the moment they walked off."""
 
     long_alpha: float = 0.02
     """Per-frame learning rate of the long background, where it is visible."""
@@ -62,17 +67,22 @@ class DetectorConfig:
     short_alpha: float = 0.25
     """Per-frame learning rate of the short background."""
 
-    min_area_ratio: float = 0.0012
+    min_area_ratio: float = 0.0004
     """Smallest item, as a fraction of the frame."""
 
     max_area_ratio: float = 0.10
     """Largest item. Bigger static shapes are people, furniture moves or lighting."""
 
-    mover_min_area_ratio: float = 0.002
+    mover_min_area_ratio: float = 0.0012
     """Smallest moving shape that counts as a person nearby."""
 
     lost_seconds: float = 2.0
     """A track not seen for this long is closed."""
+
+    ghost_edge_ratio: float = 1.3
+    """A new 'item' whose background has clearly more edges than the live
+    frame is a ghost: something that was there and left, revealing the floor.
+    Ghosts are healed into the background instead of reported."""
 
     scene_change_ratio: float = 0.45
     """If this fraction of the frame differs from the background, the camera
@@ -145,6 +155,7 @@ class DetectionResult:
     duration_s: float
     frame_size: tuple[int, int]
     scene_resets: list[float] = field(default_factory=list)
+    ghosts_healed: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -203,9 +214,24 @@ def _probe_scaled_size(path: Path, width: int) -> tuple[int, int]:
     return int(parts[1]), int(parts[2])
 
 
+def _native_width(path: Path) -> int | None:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, timeout=60,
+    )
+    try:
+        return int(result.stdout.strip().splitlines()[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def iter_frames(path: Path, config: DetectorConfig) -> Iterator[tuple[float, np.ndarray]]:
     """Yield (offset_seconds, BGR frame) at ``config.sample_fps``."""
-    width, height = _probe_scaled_size(path, config.work_width)
+    native = _native_width(path) or config.work_width
+    target = min(config.work_width, native)
+    target -= target % 2
+    width, height = _probe_scaled_size(path, target)
     frame_bytes = width * height * 3
     process = subprocess.Popen(
         [
@@ -272,6 +298,35 @@ def _gap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
     return float((dx * dx + dy * dy) ** 0.5)
 
 
+def _edges(image: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    return np.abs(gx) + np.abs(gy)
+
+
+def _is_ghost(frame: np.ndarray, background: np.ndarray, mask: np.ndarray, box, ratio: float) -> bool:
+    """Did something *leave* here, rather than arrive?
+
+    Look only along the outline of the changed region. A real item has a
+    sharp outline in the live frame. A ghost (the floor revealed where
+    something used to stand) has its outline only in the old background,
+    and the live frame is smooth across it.
+    """
+    x, y, w, h = box
+    pad = 4
+    y0, y1 = max(0, y - pad), min(frame.shape[0], y + h + pad)
+    x0, x1 = max(0, x - pad), min(frame.shape[1], x + w + pad)
+    region = mask[y0:y1, x0:x1].astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    band = (cv2.dilate(region, kernel) - cv2.erode(region, kernel)).astype(bool)
+    if not band.any():
+        return False
+    live = float(_edges(frame[y0:y1, x0:x1])[band].mean())
+    past = float(_edges(background[y0:y1, x0:x1])[band].mean())
+    return past > ratio * max(live, 1.0)
+
+
 def detect_left_items(
     path: str | Path,
     config: DetectorConfig | None = None,
@@ -287,11 +342,7 @@ def detect_left_items(
     kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
-    long_bg: np.ndarray | None = None
-    short_bg: np.ndarray | None = None
-    static_age: np.ndarray | None = None
-    init_frames: list[np.ndarray] = []
-    init_count = max(1, int(config.bg_init_seconds * config.sample_fps))
+    init_count = max(2, int(config.bg_init_seconds * config.sample_fps))
 
     active: list[ItemTrack] = []
     finished: list[ItemTrack] = []
@@ -301,22 +352,33 @@ def detect_left_items(
     frame_size = (0, 0)
     resets: list[float] = []
     big_change_since: float | None = None
+    ghosts = 0
 
-    for offset, frame in iter_frames(media, config):
+    source = iter_frames(media, config)
+    buffered: list[tuple[float, np.ndarray]] = []
+    for item in source:
+        buffered.append(item)
+        if len(buffered) >= init_count:
+            break
+    if len(buffered) < 2:
+        raise DetectorError("the video is too short to analyse (under half a second)")
+    # Median over the opening seconds (thinned to at most 40 frames).
+    step = max(1, len(buffered) // 40)
+    init_frames = [cv2.GaussianBlur(f, (5, 5), 0).astype(np.float32) for _, f in buffered[::step]]
+    long_bg = np.median(np.stack(init_frames), axis=0).astype(np.float32)
+    short_bg = cv2.GaussianBlur(buffered[0][1], (5, 5), 0).astype(np.float32)
+    static_age = np.zeros(long_bg.shape[:2], dtype=np.float32)
+
+    def all_frames():
+        yield from buffered
+        yield from source
+
+    for offset, frame in all_frames():
         frames += 1
         height, width = frame.shape[:2]
         frame_size = (width, height)
         frame_area = width * height
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
-
-        if long_bg is None:
-            init_frames.append(blurred.astype(np.float32))
-            if len(init_frames) < init_count:
-                continue
-            long_bg = np.median(np.stack(init_frames), axis=0).astype(np.float32)
-            short_bg = long_bg.copy()
-            static_age = np.zeros((height, width), dtype=np.float32)
-            continue
 
         assert short_bg is not None and static_age is not None
         changed_long = _colour_distance(blurred, long_bg) > config.diff_threshold
@@ -375,6 +437,12 @@ def detect_left_items(
                     best, best_score = track, score
             if best is None or best_score < 0.2:
                 x, y, w, h = box
+                if _is_ghost(blurred, long_bg, item_mask, box, config.ghost_edge_ratio):
+                    region = item_mask[y:y + h, x:x + w].astype(bool)
+                    long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
+                    static_age[y:y + h, x:x + w][region] = 0
+                    ghosts += 1
+                    continue
                 age = float(static_age[y:y + h, x:x + w].max())
                 best = ItemTrack(
                     track_id=next_id,
@@ -424,9 +492,6 @@ def detect_left_items(
         if progress and frames % int(config.sample_fps * 30) == 0:
             progress(f"analysed {offset:.0f}s of video, {len(active)} item(s) in view")
 
-    if long_bg is None:
-        raise DetectorError("the video is too short to analyse (under one second)")
-
     finished.extend(active)
     tracks = [
         t for t in finished
@@ -439,6 +504,7 @@ def detect_left_items(
         duration_s=offset + dt,
         frame_size=frame_size,
         scene_resets=resets,
+        ghosts_healed=ghosts,
     )
 
 
@@ -446,6 +512,7 @@ def summary(result: DetectionResult) -> str:
     """One-line JSON summary, for logs."""
     return json.dumps({
         "frames": result.frames_analysed,
+        "ghosts_healed": result.ghosts_healed,
         "duration_s": round(result.duration_s, 1),
         "tracks": [
             {
