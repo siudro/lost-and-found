@@ -84,6 +84,12 @@ class DetectorConfig:
     frame is a ghost: something that was there and left, revealing the floor.
     Ghosts are healed into the background instead of reported."""
 
+    ignore_polygons: tuple[tuple[tuple[float, float], ...], ...] = ()
+    """Areas of the picture to ignore, as polygons in 0–1 coordinates
+    (x across, y down). Set per camera: a glass railing looking down on
+    another floor, a window onto the street, a screen. Nothing there counts
+    as an item or as a person nearby."""
+
     light_ncc: float = 0.75
     """Correlation above which a changed patch is treated as the same floor
     under different light, not an object."""
@@ -445,6 +451,15 @@ def detect_left_items(
     short_bg = cv2.GaussianBlur(buffered[0][1], (5, 5), 0).astype(np.float32)
     static_age = np.zeros(long_bg.shape[:2], dtype=np.float32)
     activity = np.zeros(long_bg.shape[:2], dtype=np.float32)
+    watch = np.ones(long_bg.shape[:2], dtype=bool)
+    for polygon in config.ignore_polygons:
+        points = np.array(
+            [[round(x * (watch.shape[1] - 1)), round(y * (watch.shape[0] - 1))] for x, y in polygon],
+            dtype=np.int32,
+        )
+        ignored = np.zeros(watch.shape, np.uint8)
+        cv2.fillPoly(ignored, [points], 1)
+        watch &= ~ignored.astype(bool)
 
     def all_frames():
         yield from buffered
@@ -458,8 +473,8 @@ def detect_left_items(
         blurred = cv2.GaussianBlur(frame, (5, 5), 0)
 
         assert short_bg is not None and static_age is not None
-        changed_long = _colour_distance(blurred, long_bg) > config.diff_threshold
-        moving = _colour_distance(blurred, short_bg) > config.diff_threshold
+        changed_long = (_colour_distance(blurred, long_bg) > config.diff_threshold) & watch
+        moving = (_colour_distance(blurred, short_bg) > config.diff_threshold) & watch
 
         # Camera moved or lights changed: rebuild instead of reporting the room.
         if changed_long.mean() > config.scene_change_ratio:
