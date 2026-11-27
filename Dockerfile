@@ -27,6 +27,7 @@ COPY app ./app
 COPY schemas ./schemas
 COPY fixtures ./fixtures
 COPY tools ./tools
+COPY prompts ./prompts
 
 # The database lives on a mounted volume in production. Creating the
 # directory here means the app works even before a volume is attached.
