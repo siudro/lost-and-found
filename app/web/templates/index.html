@@ -120,6 +120,8 @@
     details.limits ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 15px; }
     .handover { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); font-size: 14px; }
     .handover svg { flex: none; margin-top: 3px; }
+    .ai-note { font-size: 13px; color: var(--muted); }
+    .bot .ai-note { margin-top: 4px; }
     .error { background: var(--red-soft); color: var(--red); padding: 10px 14px; border-radius: 10px; }
 
     /* ---------- composer ---------- */
@@ -421,11 +423,14 @@ function shortPlace(label) {
 }
 function stampFor(m) { return `${m.local_time}  ${STATE[m.state] || ''}`.trim(); }
 
-function renderConversation(c) { return `<p>${esc(c.text)}</p>${chips(c.suggestions)}`; }
+const AI_NOTE = '<p class="ai-note">Written with AI. It can only use what the search found.</p>';
+function renderConversation(c) {
+  return `<p>${esc(c.text)}</p>${c.phrased_by === 'llm' ? AI_NOTE : ''}${chips(c.suggestions)}`;
+}
 
 function renderAnswer(a) {
   const matches = a.matches || [];
-  let html = `<h2>${esc(a.headline)}</h2><p>${esc(a.lead || a.body)}</p>`;
+  let html = `<h2>${esc(a.headline)}</h2><p>${esc(a.lead || a.body)}</p>${a.phrased_by === 'llm' ? AI_NOTE : ''}`;
   if (matches.length) {
     html += evidenceCard(matches[0]);
     if (matches.length > 1) {

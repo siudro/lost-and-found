@@ -117,9 +117,10 @@ PROVIDERS: tuple[Provider, ...] = (
         requirement=Requirement.OPTIONAL_KEY,
         env_var="LLM_API_KEY",
         purpose=(
-            "Rewrites the composed answer into friendlier prose. It never "
-            "decides what is true — the answer text is composed from evidence "
-            "first, then optionally rephrased."
+            "OpenAI model (LLM_MODEL, default gpt-4o-mini) that rewrites the composed "
+            "answer into friendlier prose and handles chat that is not a search. It never "
+            "decides what is true: every time and number in its reply is checked against "
+            "the search result, and replies that add any are discarded."
         ),
         without_it=(
             "Answers are returned as template-composed text. Every fact is "

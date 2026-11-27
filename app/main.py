@@ -27,6 +27,7 @@ from starlette.requests import Request
 
 from .ai.providers import PROVIDERS
 from .core.chat import ChatService
+from .ai.llm import LLMClient
 from .core.conversation import small_talk
 from .core.detector import DetectorConfig
 from .core.diagnostics import provider_summary, run_checks
@@ -152,6 +153,8 @@ def media_dir() -> Path:
     return db.parent / "media"
 
 
+LLM = LLMClient.from_env()
+
 SOURCE_ID = re.compile(r"^src_[a-z0-9_]+$")
 
 
@@ -212,14 +215,56 @@ def chat(payload: dict):
         raise HTTPException(status_code=400, detail="message is too long (1000 characters at most)")
     store = get_store()
     try:
-        reply = small_talk(text, suggested_questions(newest_footage_day(store)))
+        suggestions = suggested_questions(newest_footage_day(store))
+        reply = small_talk(text, suggestions)
         if reply is not None:
             return {"conversation": reply.to_dict()}
         service = ChatService(store, media_url_for=media_url_for)
         result = service.ask(text)
-        return result.to_dict()
+        payload = result.to_dict()
+        if not looks_like_search(text, payload.get("query") or {}):
+            written = LLM.chat_reply(text)
+            return {"conversation": {
+                "kind": "llm" if written else "steer",
+                "text": written or (
+                    "I can help you find something you lost. Tell me what it is, its colour, "
+                    "and roughly when and where you last had it."
+                ),
+                "suggestions": suggestions,
+                "phrased_by": "llm" if written else "template",
+            }}
+        answer = payload["answer"]
+        phrased = LLM.phrase_answer(text, answer)
+        answer["phrased_by"] = "llm" if phrased else "template"
+        if phrased:
+            answer["lead"] = phrased  # body stays the composed, fact-checked record
+        return payload
     finally:
         store.close()
+
+
+SEARCH_WORDS = re.compile(
+    r"\b(lost|lose|losing|left|leave|forgot|forget|missing|misplaced|find|found|seen|see|saw|"
+    r"anything|something|item|items|thing|things|happened|happen|where|camera|footage|video|"
+    r"pick(ed)? up|dropped|drop)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_search(text: str, query: dict) -> bool:
+    """False for chat like "how are you" or "my name is Sara": no item, colour,
+    feature or place was recognised, and no lost-property words."""
+    if query.get("item_terms") or query.get("colors") or query.get("features") or query.get("location_terms"):
+        return True
+    # A day on its own ("how are you today") is not a search; a day with a
+    # lost-property word ("what happened today") is.
+    return bool(SEARCH_WORDS.search(text))
+
+
+@app.get("/api/llm/status")
+def llm_status():
+    """Whether the LLM is connected and how much it has been used today. Never shows the key."""
+    return LLM.status()
 
 
 @app.get("/media/{name}")

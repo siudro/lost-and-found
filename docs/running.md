@@ -152,6 +152,15 @@ python tests/test_rules_catch_violations.py  # 15/15 forbidden states rejected
 
 The home page is a chat. Footage (upload, samples, recordings on file) and How it works (limits, system status) are separate tabs. Greetings, thanks and "what can you do" get a short conversational reply (`app/core/conversation.py`); everything else goes to the footage search. A link such as `/?q=Did%20anyone%20leave%20a%20bag%20today%3F` opens the chat and asks that question, which is handy for demos.
 
+# The LLM
+
+Set `LLM_API_KEY` (an OpenAI key) in Railway > Variables. With it, the chat (`app/ai/llm.py`):
+
+- rewrites each search answer into a short reply. The composed `body` stays the record; only `lead` changes, and the page labels the reply "Written with AI";
+- answers chat that is not a search ("my name is Sara") and steers back to describing the item.
+
+Guards: every clock time and number in a reply must appear in the search result, and replies claiming a handover or a sighting are discarded. In all those cases the composed text is used. Greetings never call the API, identical questions are cached, there is a daily call cap (`LLM_DAILY_CALL_LIMIT`, default 150) and a reply cap (`LLM_MAX_OUTPUT_TOKENS`, default 160). `GET /api/llm/status` shows today's usage and never shows the key. Without a key, everything still works with composed text.
+
 # Testing with footage
 
 On the home page:
