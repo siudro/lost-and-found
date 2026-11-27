@@ -263,8 +263,8 @@
       </div>
       <div class="job" id="uploadJob" aria-live="polite"></div>
 
-      <h2>Or try real footage</h2>
-      <p class="lede">Short clips from the CAVIAR research dataset (EC Funded CAVIAR project/IST 2001 37540, CC BY-SA), filmed in 2003 in a building lobby and replayed as if recorded just now.</p>
+      <h2>Or try sample footage</h2>
+      <p class="lede">Real clips from the CAVIAR research dataset (EC Funded CAVIAR project/IST 2001 37540, CC BY-SA), filmed in 2003 in a building lobby, and one simulated classroom clip. All are replayed as if recorded just now.</p>
       <div class="samples" id="samples"></div>
       <div class="job" id="sampleJob" aria-live="polite"></div>
 
@@ -625,6 +625,7 @@ const SAMPLE_NOTES = {
   left_bag_picked_up: 'A bag is left near the wall, then picked up.',
   left_bag: 'A bag is put down by the far wall.',
   left_box: 'A box is put down in the middle of the lobby.',
+  classroom_jacket: 'Computer-drawn, 10 minutes. A student hangs a gray jacket on a chair and forgets it at the bell.',
 };
 function loadSamplesPanel() {
   $('samples').innerHTML = samples.map(s => `<button class="sample" type="button" data-id="${esc(s.id)}">

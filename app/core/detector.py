@@ -109,6 +109,8 @@ class TrackPoint:
     internal_motion: float = 0.0
     """Fraction of the box's pixels still moving. A bag is ~0; a person
     standing still keeps swaying, breathing and gesturing."""
+    ring_motion: float = 0.0
+    """Fraction of the pixels just around the box that are moving."""
 
 
 @dataclass
@@ -171,6 +173,8 @@ class DetectionResult:
     frame_size: tuple[int, int]
     scene_resets: list[float] = field(default_factory=list)
     ghosts_healed: int = 0
+    heals: list = field(default_factory=list)
+    """(time, box, reason, what) for every region healed into the background."""
 
 
 # --------------------------------------------------------------------------
@@ -320,26 +324,76 @@ def _edges(image: np.ndarray) -> np.ndarray:
     return np.abs(gx) + np.abs(gy)
 
 
-def _is_ghost(frame: np.ndarray, background: np.ndarray, mask: np.ndarray, box, ratio: float) -> bool:
-    """Did something *leave* here, rather than arrive?
+def _is_ghost(frame: np.ndarray, background: np.ndarray, mask: np.ndarray, box, ratio: float,
+              empty_room: np.ndarray | None = None, moving: np.ndarray | None = None,
+              threshold: float = 30.0) -> str | None:
+    """Did something *leave* here, rather than arrive? Returns "reverted",
+    "revealed" or None.
 
-    Look only along the outline of the changed region. A real item has a
-    sharp outline in the live frame. A ghost (the floor revealed where
-    something used to stand) has its outline only in the old background,
-    and the live frame is smooth across it.
+    Never decided while anything is moving next to the region: a person
+    there could be the thing that is changing it.
+
+    Two ways to be a ghost:
+
+    * the region has gone back to how the empty room looked at the start;
+    * the old background had an outline here that the live frame lacks, AND
+      the live region looks like what surrounds it (bare floor revealed).
+      The second condition matters: a plain gray jacket hung on a chair has
+      fewer edges than the empty chair behind it, but it does not look like
+      the floor around it, so it is not a ghost.
     """
     x, y, w, h = box
     pad = 4
     y0, y1 = max(0, y - pad), min(frame.shape[0], y + h + pad)
     x0, x1 = max(0, x - pad), min(frame.shape[1], x + w + pad)
+    if moving is not None and moving[y0:y1, x0:x1].mean() > 0.02:
+        return None
+    inside = mask[y:y + h, x:x + w].astype(bool)
+    if not inside.any():
+        return None
+    live_in = frame[y:y + h, x:x + w][inside].astype(np.float32)
+    if empty_room is not None:
+        start = empty_room[y:y + h, x:x + w][inside]
+        back_to_start = np.sqrt(((live_in - start) ** 2).sum(axis=1)) < threshold
+        if back_to_start.mean() > 0.5:
+            return "reverted"  # mostly back to the empty room; only those pixels are erased
     region = mask[y0:y1, x0:x1].astype(np.uint8)
     kernel = np.ones((3, 3), np.uint8)
     band = (cv2.dilate(region, kernel) - cv2.erode(region, kernel)).astype(bool)
     if not band.any():
-        return False
+        return None
     live = float(_edges(frame[y0:y1, x0:x1])[band].mean())
     past = float(_edges(background[y0:y1, x0:x1])[band].mean())
-    return past > ratio * max(live, 1.0)
+    if past <= ratio * max(live, 1.0):
+        return None
+    ring = ~cv2.dilate(region, np.ones((5, 5), np.uint8)).astype(bool)
+    if ring.sum() < 8:
+        return None
+    surround = frame[y0:y1, x0:x1][ring].astype(np.float32).mean(axis=0)
+    if float(np.sqrt(((live_in.mean(axis=0) - surround) ** 2).sum())) < 25:
+        return "revealed"
+    return None
+
+
+def _heal(long_bg, static_age, item_mask, blurred, empty_room, box, threshold, kind="reverted") -> int:
+    """Copy a ghost region into the background. Only the pixels that look
+    like the empty room again are healed when the region is mixed: a
+    person who sat next to a jacket and left leaves both their old spot
+    (back to the empty room) and the jacket (not) in one region, and only
+    the first may be erased. Returns how many item pixels remain."""
+    x, y, w, h = box
+    region = item_mask[y:y + h, x:x + w].astype(bool)
+    live = blurred[y:y + h, x:x + w]
+    start = empty_room[y:y + h, x:x + w]
+    reverted = np.sqrt(((live.astype(np.float32) - start) ** 2).sum(axis=2)) < threshold
+    if kind != "reverted" or (region & reverted).sum() >= 0.8 * max(region.sum(), 1) or not (region & reverted).any():
+        heal = region  # a clean ghost, or floor revealed: heal all of it
+    else:
+        heal = region & reverted
+    long_bg[y:y + h, x:x + w][heal] = blurred[y:y + h, x:x + w][heal]
+    static_age[y:y + h, x:x + w][heal] = 0
+    item_mask[y:y + h, x:x + w][heal] = 0
+    return int((region & ~heal).sum())
 
 
 def _has_object_edges(frame: np.ndarray, background: np.ndarray, box) -> bool:
@@ -435,6 +489,7 @@ def detect_left_items(
     resets: list[float] = []
     big_change_since: float | None = None
     ghosts = 0
+    heals: list = []
 
     source = iter_frames(media, config)
     buffered: list[tuple[float, np.ndarray]] = []
@@ -448,6 +503,7 @@ def detect_left_items(
     step = max(1, len(buffered) // 40)
     init_frames = [cv2.GaussianBlur(f, (5, 5), 0).astype(np.float32) for _, f in buffered[::step]]
     long_bg = np.median(np.stack(init_frames), axis=0).astype(np.float32)
+    empty_room = long_bg.copy()  # never updated: what the room looked like at the start
     short_bg = cv2.GaussianBlur(buffered[0][1], (5, 5), 0).astype(np.float32)
     static_age = np.zeros(long_bg.shape[:2], dtype=np.float32)
     activity = np.zeros(long_bg.shape[:2], dtype=np.float32)
@@ -530,12 +586,21 @@ def detect_left_items(
                     best, best_score = track, score
             if best is None or best_score < 0.2:
                 x, y, w, h = box
-                if _is_ghost(blurred, long_bg, item_mask, box, config.ghost_edge_ratio) or \
-                        _only_light_changed(blurred, long_bg, box, config.light_ncc, item_mask):
-                    region = item_mask[y:y + h, x:x + w].astype(bool)
-                    long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
-                    static_age[y:y + h, x:x + w][region] = 0
+                ghost = _is_ghost(blurred, long_bg, item_mask, box, config.ghost_edge_ratio,
+                                  empty_room, moving, config.diff_threshold)
+                y0p, x0p = max(0, y - 4), max(0, x - 4)
+                busy = moving[y0p:y + h + 4, x0p:x + w + 4].mean() > 0.02
+                light = not ghost and not busy and _only_light_changed(blurred, long_bg, box, config.light_ncc, item_mask)
+                if ghost or light:
+                    if ghost:
+                        left = _heal(long_bg, static_age, item_mask, blurred, empty_room, box, config.diff_threshold, ghost)
+                    else:
+                        region = item_mask[y:y + h, x:x + w].astype(bool)
+                        long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
+                        static_age[y:y + h, x:x + w][region] = 0
+                        left = 0
                     ghosts += 1
+                    heals.append((round(offset, 1), box, "ghost" if ghost else "light", f"new, {left} px kept"))
                     continue
                 age = float(static_age[y:y + h, x:x + w].max())
                 best = ItemTrack(
@@ -552,12 +617,18 @@ def detect_left_items(
             distance = min((_gap(box, m) for m in others), default=None)
             x, y, w, h = box
             inside = float(moving[y:y + h, x:x + w].mean())
+            rp = max(4, min(w, h) // 2)
+            ry0, ry1 = max(0, y - rp), min(height, y + h + rp)
+            rx0, rx1 = max(0, x - rp), min(width, x + w + rp)
+            ring_area = (ry1 - ry0) * (rx1 - rx0) - w * h
+            ring_moving = (float(moving[ry0:ry1, rx0:rx1].sum()) - float(moving[y:y + h, x:x + w].sum())) / max(ring_area, 1)
             best.points.append(TrackPoint(
                 offset_s=offset,
                 centre=(x + w / 2, y + h / 2),
                 bbox=box,
                 person_distance_ratio=None if distance is None else distance / width,
                 internal_motion=inside,
+                ring_motion=ring_moving,
             ))
             best.last_seen_offset_s = offset
 
@@ -572,18 +643,20 @@ def detect_left_items(
         # (a sunbeam moving across the floor). Re-check every two seconds.
         if frames % max(1, int(config.sample_fps * 2)) == 0:
             for track in list(active):
-                if track.track_id in matched and (
-                    _is_ghost(blurred, long_bg, item_mask, track.bbox, config.ghost_edge_ratio)
-                    or (_only_light_changed(blurred, long_bg, track.bbox, config.light_ncc, item_mask)
-                        and not _has_object_edges(blurred, long_bg, track.bbox))
-                ):
-                    x, y, w, h = track.bbox
-                    region = item_mask[y:y + h, x:x + w].astype(bool)
-                    long_bg[y:y + h, x:x + w][region] = blurred[y:y + h, x:x + w][region]
-                    static_age[y:y + h, x:x + w][region] = 0
-                    active.remove(track)
-                    matched.discard(track.track_id)
+                if track.track_id not in matched:
+                    continue
+                kind = _is_ghost(blurred, long_bg, item_mask, track.bbox, config.ghost_edge_ratio,
+                                 empty_room, moving, config.diff_threshold)
+                if kind is None and _only_light_changed(blurred, long_bg, track.bbox, config.light_ncc, item_mask) \
+                        and not _has_object_edges(blurred, long_bg, track.bbox):
+                    kind = "light"
+                if kind:
+                    left = _heal(long_bg, static_age, item_mask, blurred, empty_room, track.bbox, config.diff_threshold, kind)
                     ghosts += 1
+                    heals.append((round(offset, 1), track.bbox, "recheck", f"track {track.track_id}, {left} px kept"))
+                    if left < config.min_area_ratio * frame_area:
+                        active.remove(track)
+                        matched.discard(track.track_id)
 
         still_active = []
         for track in active:
@@ -627,6 +700,7 @@ def detect_left_items(
         frame_size=frame_size,
         scene_resets=resets,
         ghosts_healed=ghosts,
+        heals=heals,
     )
 
 
