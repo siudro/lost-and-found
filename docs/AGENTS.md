@@ -74,6 +74,6 @@ Be suspicious of any claim that it is. As of this commit:
 - No speaker/audio handling (audio off by design).
 - No live camera — recorded upload and replay only.
 - No SAM segmenter enabled.
-- No evaluation harness against CAVIAR yet — that is the next major piece.
+- Evaluation harness covers simulated clips with known truth (`tools/evaluate.py`, results in `docs/evaluation.md`). CAVIAR is scored by eye only; scoring against its XML ground truth is not written yet.
 
 When you finish a piece, update this section. A stale "not built yet" list is how agents duplicate work.
