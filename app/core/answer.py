@@ -108,12 +108,19 @@ class Answer:
     handover_status: str = "no_intake_records"
     handover_note: str = ""
     timezone_used: str = "Asia/Riyadh"
+    lead: str = ""
+    """The main sentences only. ``body`` is the full answer; a chat
+    interface that shows matches, limitations and the handover note as
+    their own blocks can show ``lead`` instead of repeating them."""
+    available_dates: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "answer_mode": self.answer_mode,
             "headline": self.headline,
             "body": self.body,
+            "lead": self.lead or self.body,
+            "available_dates": self.available_dates,
             "matches": [m.to_dict() for m in self.matches],
             "coverage_limitations": [l.to_dict() for l in self.limitations],
             "scope_statement": self.scope_statement,
@@ -183,6 +190,8 @@ def compose_matches(
             "with no one nearby; the footage cannot show whose it was."
         )
 
+    lead = " ".join(lines)
+
     if len(matches) > 1:
         others = ", ".join(
             f"{m.local_time} ({m.difference_note})" for m in matches[1:4]
@@ -201,6 +210,7 @@ def compose_matches(
         answer_mode="matches_found",
         headline=f"Possible match at {best.local_time}",
         body=" ".join(lines),
+        lead=lead,
         matches=matches,
         limitations=limitations,
         scope_statement=scope_statement,
@@ -243,22 +253,27 @@ def compose_no_match(
             "coverage, not a negative result."
         )
 
+    lead = body
     if limitations:
         body += " " + " ".join(l.description for l in limitations)
 
     if not footage_present:
         if available_dates:
-            body += (
+            extra = (
                 " Footage has been processed for: " + ", ".join(available_dates)
                 + ". Ask about one of those days, or upload footage for the day you need."
             )
         else:
-            body += " No footage has been uploaded yet. Upload a video to search it."
+            extra = " No footage has been uploaded yet. Upload a video to search it."
+        body += extra
+        lead += extra
 
     return Answer(
         answer_mode=mode,
         headline=headline,
         body=body,
+        lead=lead,
+        available_dates=list(available_dates or []) if not footage_present else [],
         matches=[],
         limitations=limitations,
         scope_statement=scope_statement,

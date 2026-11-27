@@ -148,6 +148,10 @@ python tests/test_rules_catch_violations.py  # 15/15 forbidden states rejected
 | GET | `/api/providers` | which AI is configured, and what happens without it |
 | GET | `/api/stats` | row counts and sources |
 
+# The interface
+
+The home page is a chat. Footage (upload, samples, recordings on file) and How it works (limits, system status) are separate tabs. Greetings, thanks and "what can you do" get a short conversational reply (`app/core/conversation.py`); everything else goes to the footage search. A link such as `/?q=Did%20anyone%20leave%20a%20bag%20today%3F` opens the chat and asks that question, which is handy for demos.
+
 # Testing with footage
 
 On the home page:
