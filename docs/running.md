@@ -204,3 +204,17 @@ The camera button in the chat searches with a photo (`POST /api/chat/photo`). Th
 Prompts live in `prompts/` as versioned files (see `prompts/CHANGELOG.md`). The readiness page lists each prompt's version and whether OpenAI accepted the key. That check lists models, which costs no tokens; set `SKIP_PROVIDER_CHECKS=1` to skip it.
 
 CI (`.github/workflows/ci.yml`) runs the fixture validator, the forbidden-state test and the pytest suite on every push and pull request.
+
+
+# Live cameras and replay
+
+Live footage goes through the same path as an upload. On a computer at the venue that can reach the camera, run:
+
+```
+python tools/live_ingest.py rtsp://USER:PASS@CAMERA-IP/stream \
+    --server https://YOUR-APP.up.railway.app --camera cam_classroom_3 --location "Classroom 3"
+```
+
+ffmpeg cuts the stream into 10-minute segments (no re-encoding) named by their UTC start time. Each finished segment is posted to `POST /api/ingest` with `kind=live_feed`, stored on the ingestion clock, and processed exactly like an upload. To demo the live path with a file, add `--replay`: the file is read at real speed and posted with `kind=replay`.
+
+Limits: segments are processed independently, so an item still lying there when a new segment starts is part of that segment's background. It stays searchable from the segment where it was put down, but a pickup in a later segment is not seen. Carrying track state across segments is the next step.

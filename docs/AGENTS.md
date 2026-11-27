@@ -72,7 +72,7 @@ Add a test in `tests/test_api.py` that hits the real app object.
 Be suspicious of any claim that it is. As of this commit:
 
 - No speaker/audio handling (audio off by design).
-- No live camera — recorded upload and replay only.
+- Live camera and replay go through `tools/live_ingest.py` (ffmpeg segments posted to `/api/ingest` with `kind=live_feed` or `replay`). Track state is not carried across segments yet.
 - No SAM segmenter enabled.
 - Evaluation harness covers simulated clips with known truth (`tools/evaluate.py`, results in `docs/evaluation.md`). CAVIAR is scored by eye only; scoring against its XML ground truth is not written yet.
 
