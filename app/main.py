@@ -504,11 +504,34 @@ def sample_original(sample_id: str) -> Path:
     return media_dir() / "samples" / f"{sample_id}.mpg"
 
 
+# Computer-drawn footage, made on the server by tools/make_classroom_clip.py.
+# Labelled as simulated everywhere it appears.
+SIMULATED = {
+    "classroom_jacket": "Simulated: a jacket forgotten in a classroom",
+}
+
+
+def render_simulated(sample_id: str, target: Path) -> None:
+    import importlib.util
+
+    script = Path(__file__).resolve().parent.parent / "tools" / "make_classroom_clip.py"
+    spec = importlib.util.spec_from_file_location("make_classroom_clip", script)
+    module = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.modules[spec.name] = module  # dataclasses look their module up here
+    spec.loader.exec_module(module)
+    partial = target.with_suffix(".part.mp4")
+    module.render(str(partial), minutes=10)
+    partial.replace(target)
+
+
 @app.get("/api/samples")
 def samples():
     return {
         "credit": "CAVIAR dataset (EC Funded CAVIAR project/IST 2001 37540), CC BY-SA",
-        "samples": [{"id": key, "title": title} for key, (_, title) in SAMPLES.items()],
+        "samples": [{"id": key, "title": title, "simulated": False} for key, (_, title) in SAMPLES.items()]
+        + [{"id": key, "title": title, "simulated": True} for key, title in SIMULATED.items()],
     }
 
 
@@ -520,6 +543,8 @@ def ingest_sample(sample_id: str):
     the moment of ingest (clock = ingestion_clock) so they can be searched
     as today's footage, and the location label says so.
     """
+    if sample_id in SIMULATED:
+        return start_job(SIMULATED[sample_id], lambda log: ingest_simulated(sample_id, log))
     if sample_id not in SAMPLES:
         raise HTTPException(status_code=404, detail="unknown sample")
     path, title = SAMPLES[sample_id]
@@ -630,6 +655,32 @@ def delete_footage(source_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="no such footage")
     return {"deleted": source_id, "records_removed": removed}
+
+
+def ingest_simulated(sample_id: str, log) -> dict:
+    cached = media_dir() / "samples" / f"{sample_id}.mp4"
+    if not cached.exists():
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        log("drawing the simulated classroom clip (about a minute)")
+        render_simulated(sample_id, cached)
+    incoming = media_dir() / "incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+    target = incoming / f"{sample_id}_{secrets.token_hex(3)}.mp4"
+    shutil.copyfile(cached, target)
+    try:
+        return ingest_file(
+            target,
+            source_id=_new_source_id(f"sim_{sample_id}"),
+            camera_id="cam_simulated_classroom",
+            location_label="Simulated classroom (computer-drawn, not real footage)",
+            recorded_at=None,
+            kind="replay",
+            clock="ingestion_clock",
+            visibility="public_demo",
+            log=log,
+        )
+    finally:
+        target.unlink(missing_ok=True)
 
 
 @app.get("/api/footage")

@@ -161,6 +161,10 @@ Set `LLM_API_KEY` (an OpenAI key) in Railway > Variables. With it, the chat (`ap
 
 Guards: every clock time and number in a reply must appear in the search result, and replies claiming a handover or a sighting are discarded. In all those cases the composed text is used. Greetings never call the API, identical questions are cached, there is a daily call cap (`LLM_DAILY_CALL_LIMIT`, default 150) and a reply cap (`LLM_MAX_OUTPUT_TOKENS`, default 160). `GET /api/llm/status` shows today's usage and never shows the key. Without a key, everything still works with composed text.
 
+# Simulated classroom clip
+
+`tools/make_classroom_clip.py` draws a 10-minute fixed-camera classroom scene: a class arrives, one student hangs a gray hooded jacket on a chair, the lesson runs, everyone leaves at the bell, and the jacket stays while a cleaner works on the far side. It is computer-drawn and labelled SIMULATED on screen and in the site, so it is a demo aid, not evidence of accuracy on real jackets. The Footage tab offers it as a one-click sample; the server draws it on first use (about a minute). `tests/test_detector.py` checks a 4-minute version: exactly one item, the gray jacket, likely unattended.
+
 # Testing with footage
 
 On the home page:
@@ -180,6 +184,8 @@ Unattended thresholds for ingested footage (environment variables): `UNATTENDED_
 
 - The detector does not know what an item is. The item type is reported as unknown, and answers say so and point to the clip.
 - Anything already in view when the recording starts becomes part of the background and is not detected.
+- Seated people barely move, so the still parts of their bodies look like objects. Two rules handle this: shapes that keep moving like a person are ignored, and something that had a person right beside it the whole time and then left with them is not reported (`KEPT_WITH_OWNER_S` in `pipeline.py`). The cost: a bag kept at its owner's feet for over a minute and then taken away is not reported either, which is right for lost property.
+- Ghost healing only erases pixels that have gone back to the original empty room, or bare floor that matches its surroundings, and never while someone is moving next to the region. Earlier versions erased a gray jacket hung on a chair because the chair behind it had more edges.
 - A person who stands completely still can look like an item; shapes whose pixels keep moving like a person's are ignored, but not every case is caught.
 - Areas that look onto somewhere else (a glass railing over another floor, a window onto a street) need an ignore zone: `DetectorConfig(ignore_polygons=...)`. The CAVIAR samples use one for the glass railing in the lower left. Uploads have no ignore zone yet; there is no UI for drawing one.
 - The camera must not move. A large sudden change (camera bumped, lights switched) rebuilds the background, and any items being tracked at that moment are dropped.

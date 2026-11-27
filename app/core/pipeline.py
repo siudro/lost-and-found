@@ -243,18 +243,45 @@ def _judge(track: ItemTrack, thresholds: Thresholds, present_at_start: bool) -> 
     return max(verdicts, key=lambda v: (severity[v.state], v.seconds_deserted))
 
 
+KEPT_WITH_OWNER_S = 60.0
+"""An item that had someone right beside it, never alone for ALONE_BREAK_S,
+for at least this long, and then went away with them, is treated as
+belonging to that person rather than as lost property: a student's bag at
+their feet through a lesson, taken at the bell. The same rule removes the
+still back of a seated person, which background subtraction cannot tell
+from an object. Items still there at the end are always reported."""
+ALONE_BREAK_S = 3.0
+
+
+def kept_with_owner(track: ItemTrack, verdict: Inference) -> bool:
+    if track.end_reason == "removed":
+        return (
+            verdict.seconds_deserted < ALONE_BREAK_S
+            and track.last_seen_offset_s - track.placed_offset_s >= KEPT_WITH_OWNER_S
+        )
+    if track.end_reason == "lost":
+        # It went out of view without ever being left: people were around
+        # it until it vanished, so it was never lost property.
+        return verdict.state not in (State.POSSIBLY_UNATTENDED, State.LIKELY_UNATTENDED)
+    return False
+
+
 def build_item_report(
     source: SourceSpec,
     track: ItemTrack,
     index: int,
     thresholds: Thresholds,
     window_minutes: int,
-) -> ItemReport:
+) -> ItemReport | None:
+    """None for an item that stayed with its owner the whole time (see
+    KEPT_WITH_OWNER_S): nothing was left, so there is nothing to report."""
     assert source.recording_started_at is not None
     start = source.recording_started_at
     local_tz = ZoneInfo(source.timezone)
     present_at_start = track.placed_offset_s <= 1.5
     verdict = _judge(track, thresholds, present_at_start)
+    if kept_with_owner(track, verdict):
+        return None
 
     def at(offset: float) -> datetime:
         return start + timedelta(seconds=offset)
@@ -521,10 +548,16 @@ def run_pipeline(
     if progress and skipped:
         progress(f"ignored {skipped} still shape(s) that moved like a person")
 
-    reports = [
-        build_item_report(source, track, index, policy, window_minutes)
-        for index, track in enumerate(tracks, start=1)
-    ]
+    reports = []
+    kept = 0
+    for track in tracks:
+        report = build_item_report(source, track, len(reports) + 1, policy, window_minutes)
+        if report is None:
+            kept += 1
+        else:
+            reports.append(report)
+    if progress and kept:
+        progress(f"set aside {kept} thing(s) that stayed with someone the whole time and left with them")
     for report in reports:
         if progress:
             progress(report.summary)

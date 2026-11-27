@@ -119,3 +119,35 @@ def test_ignore_zone_hides_items_only_inside_it(tmp_path):
     elsewhere = (((0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)),)
     assert detect_left_items(clip, DetectorConfig(ignore_polygons=over_bag)).tracks == []
     assert len(detect_left_items(clip, DetectorConfig(ignore_polygons=elsewhere)).tracks) == 1
+
+
+def test_simulated_classroom_jacket_is_the_only_item(tmp_path):
+    """The demo clip (shortened to 4 minutes): a class sits through a lesson,
+    one student hangs a gray jacket on a chair and leaves it at the bell.
+    Seated students must not be reported; the jacket must."""
+    import importlib.util
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parent.parent / "tools" / "make_classroom_clip.py"
+    spec = importlib.util.spec_from_file_location("make_classroom_clip", script)
+    module = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.modules[spec.name] = module  # dataclasses look their module up here
+    spec.loader.exec_module(module)
+    clip = tmp_path / "classroom.mp4"
+    story = module.render(str(clip), minutes=4)
+
+    source = SourceSpec(
+        source_id="src_sim_classroom", camera_id="cam_test", venue_id="venue_test", kind="replay",
+        clock="source_clock", location_label="simulated classroom", recording_started_at=START,
+        media_path=str(clip),
+    )
+    results = run_pipeline(source)
+    observations = [o for r in results for o in r.observations]
+    assert len(observations) == 1, [o["caption_text"] for o in observations]
+    (jacket,) = observations
+    assert jacket["attributes"]["primary_color"] == "gray"
+    assert jacket["state"] == "likely_unattended"
+    assert abs(_seconds(jacket["first_seen_at"]) - story["jacket_placed_s"]) <= 6
+    assert _seconds(jacket["unattended_onset_estimate"]) >= story["owner_leaves_s"]
