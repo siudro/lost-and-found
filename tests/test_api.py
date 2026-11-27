@@ -183,3 +183,48 @@ def test_footage_can_be_deleted_but_demo_records_cannot(client, tmp_path):
     assert client.get(job["result"]["media_url"]).status_code == 404
     assert all(f["source_id"] != source_id for f in client.get("/api/footage").json()["footage"])
     assert client.delete("/api/footage/src_demo_classroom").status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Chat-first interface
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("message", ["hi", "Hello!", "thanks", "what can you do?", "salam"])
+def test_small_talk_gets_a_conversational_reply_not_a_search(client, message):
+    body = client.post("/api/chat", json={"message": message}).json()
+    assert "conversation" in body and "answer" not in body
+    assert body["conversation"]["text"]
+
+
+def test_real_questions_still_go_to_the_search(client):
+    body = client.post("/api/chat", json={"message": "Have you seen a gray jacket on 20 November 2026?"}).json()
+    assert "answer" in body
+    answer = body["answer"]
+    assert answer["answer_mode"] == "matches_found"
+    # The short lead leaves out what the chat shows as separate blocks.
+    assert "Also worth checking" not in answer["lead"]
+    assert answer["handover"]["note"] not in answer["lead"]
+    assert answer["lead"] in answer["body"] or answer["body"].startswith(answer["lead"])
+
+
+def test_day_without_footage_offers_days_that_have_it(client):
+    answer = client.post("/api/chat", json={"message": "Did anyone leave a bag on 3 March 2026?"}).json()["answer"]
+    assert answer["answer_mode"] == "footage_not_available"
+    assert "20 November 2026" in answer["available_dates"]
+
+
+def test_overview_describes_what_can_be_searched(client):
+    body = client.get("/api/overview").json()
+    assert set(body) >= {"recordings", "newest_day", "suggestions"}
+    assert len(body["suggestions"]) == 4
+
+
+def test_overlong_messages_are_refused(client):
+    assert client.post("/api/chat", json={"message": "x" * 1001}).status_code == 400
+
+
+def test_home_page_is_chat_first(client):
+    page = client.get("/").text
+    assert page.index('id="chat"') < page.index('id="footage"')
+    assert 'class="panel active" id="chat"' in page

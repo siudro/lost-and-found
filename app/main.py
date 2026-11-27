@@ -27,6 +27,7 @@ from starlette.requests import Request
 
 from .ai.providers import PROVIDERS
 from .core.chat import ChatService
+from .core.conversation import small_talk
 from .core.detector import DetectorConfig
 from .core.diagnostics import provider_summary, run_checks
 from .core.pipeline import IngestError, SourceSpec, make_playback_copy, probe_duration, run_pipeline
@@ -160,13 +161,60 @@ def media_url_for(source_id: str) -> str | None:
     return None
 
 
+def newest_footage_day(store: Store) -> str | None:
+    """Local day of the most recent recording that has a playable video."""
+    sources = sorted(
+        (s for s in store.sources() if media_url_for(s["source_id"]) and s.get("recording_started_at")),
+        key=lambda s: s["recording_started_at"],
+        reverse=True,
+    )
+    if not sources:
+        return None
+    local = parse_timestamp(sources[0]["recording_started_at"]).astimezone(ZoneInfo("Asia/Riyadh"))
+    return local.strftime("%d %B %Y").lstrip("0")
+
+
+def suggested_questions(day: str | None) -> list[str]:
+    today = datetime.now(ZoneInfo("Asia/Riyadh")).strftime("%d %B %Y").lstrip("0")
+    when = "today" if day in (None, today) else f"on {day}"
+    return [
+        f"Was anything left behind {when}?",
+        f"Did anyone leave a black bag {when}?",
+        f"Have you seen a gray item {when}?",
+        f"What happened {when}?",
+    ]
+
+
+@app.get("/api/overview")
+def overview():
+    """What the chat needs to greet someone: what footage exists and what to ask."""
+    store = get_store()
+    try:
+        sources = store.sources()
+        playable = [s for s in sources if media_url_for(s["source_id"])]
+        day = newest_footage_day(store)
+        return {
+            "recordings": len(playable),
+            "demo_records": len(sources) - len(playable),
+            "newest_day": day,
+            "suggestions": suggested_questions(day),
+        }
+    finally:
+        store.close()
+
+
 @app.post("/api/chat")
 def chat(payload: dict):
     text = (payload or {}).get("message", "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="message is required")
+    if len(text) > 1000:
+        raise HTTPException(status_code=400, detail="message is too long (1000 characters at most)")
     store = get_store()
     try:
+        reply = small_talk(text, suggested_questions(newest_footage_day(store)))
+        if reply is not None:
+            return {"conversation": reply.to_dict()}
         service = ChatService(store, media_url_for=media_url_for)
         result = service.ask(text)
         return result.to_dict()
