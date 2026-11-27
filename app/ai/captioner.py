@@ -137,8 +137,15 @@ def describe_items(llm, media: str | Path, views: list[ItemView], crops_dir: Pat
     out: dict[str, dict] = {}
     budget = max_captions()
     for view in views:
-        frame = grab_frame(media, view.offset_s)
+        frame = None
+        # A seek can fail on some files (for example at the very end of an
+        # MPEG stream): step back a little rather than lose the picture.
+        for offset in (view.offset_s, view.offset_s - 0.5, view.offset_s - 2.0, view.offset_s / 2):
+            frame = grab_frame(media, offset)
+            if frame is not None:
+                break
         if frame is None:
+            log(f"could not read a frame for {view.observation_id}; no picture saved")
             continue
         crop = crop_item(frame, view.bbox, view.work_size)
         if crop.size == 0:

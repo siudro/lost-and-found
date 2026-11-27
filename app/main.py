@@ -382,6 +382,9 @@ def job_status(job_id: str):
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "500")) * 1024 * 1024
 
 
+INGEST_KINDS = {"recorded_upload": "upload", "live_feed": "live", "replay": "replay"}
+
+
 def _new_source_id(prefix: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return f"src_{prefix}_{stamp}_{secrets.token_hex(2)}"
@@ -507,16 +510,27 @@ def ingest(
     location_label: str = Form(""),
     recorded_at: str = Form(...),
     visibility: str = Form("approved_private"),
+    kind: str = Form("recorded_upload"),
 ):
-    """Upload a clip: decode it, find items that were left, keep a playback copy."""
+    """Upload a clip: decode it, find items that were left, keep a playback copy.
+
+    Live cameras and replays use this same path: tools/live_ingest.py cuts
+    the stream into segments and posts each one with kind=live_feed (or
+    replay), so everything downstream behaves identically.
+    """
     try:
         started = parse_timestamp(recorded_at)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=f"recorded_at: {error}") from error
     if visibility not in {"public_demo", "approved_private", "internal_only"}:
         raise HTTPException(status_code=400, detail="unknown visibility")
+    if kind not in INGEST_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be recorded_upload, live_feed or replay")
+    # A live segment is stamped when it was read, so its clock is the
+    # ingestion clock (absolute but a little late), not the camera's.
+    clock = "ingestion_clock" if kind == "live_feed" else "source_clock"
 
-    source_id = _new_source_id("upload")
+    source_id = _new_source_id(INGEST_KINDS[kind])
     suffix = Path(file.filename or "clip.mp4").suffix.lower()[:8] or ".mp4"
     uploads = media_dir() / "incoming"
     uploads.mkdir(parents=True, exist_ok=True)
@@ -543,8 +557,8 @@ def ingest(
                 camera_id=camera_id or "cam_upload_1",
                 location_label=location_label.strip() or None,
                 recorded_at=started,
-                kind="recorded_upload",
-                clock="source_clock",
+                kind=kind,
+                clock=clock,
                 visibility=visibility,
                 log=log,
             )
