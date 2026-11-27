@@ -188,6 +188,7 @@ Unattended thresholds for ingested footage (environment variables): `UNATTENDED_
 - Ghost healing only erases pixels that have gone back to the original empty room, or bare floor that matches its surroundings, and never while someone is moving next to the region. Earlier versions erased a gray jacket hung on a chair because the chair behind it had more edges.
 - A person who stands completely still can look like an item; shapes whose pixels keep moving like a person's are ignored, but not every case is caught.
 - Areas that look onto somewhere else (a glass railing over another floor, a window onto a street) need an ignore zone: `DetectorConfig(ignore_polygons=...)`. The CAVIAR samples use one for the glass railing in the lower left. Uploads have no ignore zone yet; there is no UI for drawing one.
+- Something cut off by the edge of the picture and less than 12 pixels thick there is not reported: too little of it is in view to judge.
 - The camera must not move. A large sudden change (camera bumped, lights switched) rebuilds the background, and any items being tracked at that moment are dropped.
 - No SAM or captioner enabled by default, so descriptions come from colour and position in the frame.
 - Demo fixtures are hand-written to exercise the contract, not captured from real footage.
