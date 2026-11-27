@@ -215,6 +215,47 @@ def check_providers(report: Report) -> None:
             report.add(Check(f"ai:{provider.name}", True, f"configured via {provider.env_var}"))
 
 
+def check_prompts(report: Report) -> None:
+    from ..ai.prompts import PromptError, prompt_versions
+
+    try:
+        versions = prompt_versions()
+        report.add(Check("prompts", True, ", ".join(f"{k} v{v}" for k, v in versions.items())))
+    except PromptError as error:
+        report.add(Check("prompts", False, str(error), fatal=True))
+
+
+def openai_key_status(key: str, timeout: float = 5.0, opener=None) -> tuple[bool, str]:
+    """Bounded credential check: list models (free, no tokens). Never echoes the key."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
+            return (response.status == 200), "key accepted by OpenAI"
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            return False, f"OpenAI rejected the key (HTTP {error.code}): check LLM_API_KEY; the chat uses composed answers meanwhile"
+        if error.code == 429:
+            return False, "OpenAI quota or rate limit reached (HTTP 429): the chat uses composed answers until it clears"
+        return False, f"OpenAI answered HTTP {error.code}: the chat uses composed answers meanwhile"
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False, "could not reach OpenAI (network): the chat uses composed answers meanwhile"
+
+
+def check_openai(report: Report) -> None:
+    key = (os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not key:
+        report.add(Check("openai", True, "no key set: composed answers, no AI descriptions, photo search by colour only", fatal=False))
+        return
+    if os.environ.get("SKIP_PROVIDER_CHECKS") == "1":
+        report.add(Check("openai", True, "key set; connectivity check skipped (SKIP_PROVIDER_CHECKS=1)", fatal=False))
+        return
+    ok, detail = openai_key_status(key)
+    report.add(Check("openai", ok, detail, fatal=False))
+
+
 def check_jinja(report: Report) -> None:
     ok = importlib.util.find_spec("jinja2") is not None
     report.add(Check(
@@ -234,6 +275,8 @@ def run_checks() -> Report:
     check_fixtures(report)
     check_jinja(report)
     check_providers(report)
+    check_prompts(report)
+    check_openai(report)
     return report
 
 

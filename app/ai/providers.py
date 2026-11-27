@@ -100,14 +100,16 @@ PROVIDERS: tuple[Provider, ...] = (
         name="captioner",
         capability=Capability.CAPTION,
         requirement=Requirement.OPTIONAL_KEY,
-        env_var="CAPTION_API_KEY",
+        env_var="LLM_API_KEY",
         purpose=(
-            "Vision-language model that writes the structured description: item "
-            "type, colours, visible features, location."
+            "OpenAI vision model (same key as the chat) that writes the structured "
+            "description of each found item and of visitor photos: item type, "
+            "colours, visible features, location. Capped by CAPTIONS_PER_VIDEO."
         ),
         without_it=(
-            "Captions come from the detector's class label and dominant colour, "
-            "so descriptions are thinner but never invented."
+            "Captions come from the detector's dominant colour and position, and "
+            "photo search matches by colour only, so descriptions are thinner but "
+            "never invented."
         ),
         enabled_in_demo=False,
     ),

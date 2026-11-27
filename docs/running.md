@@ -107,7 +107,7 @@ Check what is live at any time: `GET /api/providers` or the readiness panel in t
 |---|---|---|---|---|---|---|
 | 1 | `open_vocab_detector` | `DETECTOR_MODEL` | No key. Set to a model name, e.g. `yolov8x-worldv2`. Weights auto-download on first use. | Free | Finds items **by name** ("jacket") instead of by blob. Big recall gain in clutter. | Motion-based detection only |
 | 2 | `sam_segmenter` | `SAM_CHECKPOINT` + `HF_TOKEN` | [huggingface.co/facebook/sam-vit-base](https://huggingface.co/facebook/sam-vit-base) — sign in, accept the licence, then **Settings → Access Tokens → New token (read)**. Set `SAM_CHECKPOINT` to `facebook/sam-vit-base`. | Free (gated) | Clean item masks → better appearance crops | Bounding boxes from the detector |
-| 3 | `captioner` | `CAPTION_API_KEY` | Pick one provider: [OpenAI](https://platform.openai.com/api-keys) · [Anthropic](https://console.anthropic.com/) · [Google AI Studio](https://aistudio.google.com/apikey) (free tier). | ~$0.01–0.03 per 1,000 items | Real descriptions: "gray hooded jacket, zip front" | Colour + class label only |
+| 3 | `captioner` | `LLM_API_KEY` (same key) | [OpenAI](https://platform.openai.com/api-keys). Limit per video with `CAPTIONS_PER_VIDEO` (default 12). | Two low-detail images per item, roughly a fraction of a cent each with gpt-4o-mini | Real descriptions: "gray hoodie with a hood, a zipper"; photo search by item type and features | Colour and position only; photo search by colour only |
 | 4 | `llm_answerer` | `LLM_API_KEY` + `LLM_MODEL` | Same providers as above. Model name, e.g. `gpt-4o-mini` or `gemini-2.0-flash`. | < $0.01 per conversation | Friendlier phrasing | Template text, identical facts |
 | 5 | `text_embedder` | `EMBED_MODEL` | No key for local models (e.g. `all-MiniLM-L6-v2`, auto-downloads). Key only if using a hosted one. | Free locally | Catches paraphrases ("overcoat" → "jacket") | Keyword retrieval only |
 
@@ -193,3 +193,14 @@ Unattended thresholds for ingested footage (environment variables): `UNATTENDED_
 - No SAM or captioner enabled by default, so descriptions come from colour and position in the frame.
 - Demo fixtures are hand-written to exercise the contract, not captured from real footage.
 - No live camera ingest — recorded upload and replay only.
+
+
+# AI descriptions and photo search
+
+With `LLM_API_KEY` set, each processed video gets an AI description for up to `CAPTIONS_PER_VIDEO` found items (`app/ai/captioner.py`). Each call sends two small images at detail "low" (a close crop and the wider view) and asks for a fixed JSON schema: item type, colours, features, location hint, worn or not, confidence. Values outside the allowed lists are dropped in code. If the model says the thing may not be an item, or is worn, the record stays marked uncertain. A crop picture of every item is saved either way and shown in the chat and the Footage tab.
+
+The camera button in the chat searches with a photo (`POST /api/chat/photo`). The photo is decoded in memory, described, and thrown away; it is never written to disk. Without a key, only the photo's main colour is used and the answer says so. Every photo match is called a possible match.
+
+Prompts live in `prompts/` as versioned files (see `prompts/CHANGELOG.md`). The readiness page lists each prompt's version and whether OpenAI accepted the key. That check lists models, which costs no tokens; set `SKIP_PROVIDER_CHECKS=1` to skip it.
+
+CI (`.github/workflows/ci.yml`) runs the fixture validator, the forbidden-state test and the pytest suite on every push and pull request.

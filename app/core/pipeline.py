@@ -512,6 +512,7 @@ def run_pipeline(
     detector_config: DetectorConfig | None = None,
     progress=None,
     sampling_seconds: float | None = None,
+    views: list | None = None,
 ) -> list[WindowResult]:
     """Process a whole recording.
 
@@ -554,8 +555,18 @@ def run_pipeline(
         report = build_item_report(source, track, len(reports) + 1, policy, window_minutes)
         if report is None:
             kept += 1
-        else:
-            reports.append(report)
+            continue
+        reports.append(report)
+        if views is not None:
+            # The clearest look at the item: nobody near it, preferably late.
+            best = max(
+                track.points,
+                key=lambda p: (p.person_distance_ratio is None, p.person_distance_ratio or 0.0, p.offset_s),
+            )
+            from ..ai.captioner import ItemView
+
+            views.append(ItemView(report.observation["observation_id"], best.offset_s, best.bbox,
+                                  track.frame_size))
     if progress and kept:
         progress(f"set aside {kept} thing(s) that stayed with someone the whole time and left with them")
     for report in reports:

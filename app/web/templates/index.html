@@ -132,6 +132,15 @@
       background: var(--paper); line-height: 1.45;
     }
     .composer textarea:focus { outline: none; border-color: var(--focus); background: var(--surface); }
+    .attach { width: 46px; height: 46px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; flex: none; }
+    .attach:hover { border-color: var(--ink); }
+    .photo-chip { max-width: var(--column); margin: 0 auto 8px; display: none; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+    .photo-chip.show { display: flex; }
+    .photo-chip img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+    .bubble-user img { display: block; max-width: 220px; max-height: 220px; border-radius: 10px; margin-bottom: 6px; }
+    .crop { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); flex: none; background: var(--gray-soft); }
+    .evidence-head { display: flex; gap: 12px; align-items: flex-start; }
+    .row .crop { width: 40px; height: 40px; }
     .send { width: 46px; height: 46px; border-radius: 12px; border: 0; background: var(--ink); display: grid; place-items: center; flex: none; }
     .send:disabled { opacity: .4; cursor: default; }
     .hint { max-width: var(--column); margin: 6px auto 0; font-size: 13px; color: var(--muted); }
@@ -224,14 +233,20 @@
       <div class="thread" id="thread" aria-live="polite"></div>
     </div>
     <div class="composer-wrap">
+      <div class="photo-chip" id="photoChip"><img id="photoPreview" alt="Photo to search with" /><span id="photoName"></span>
+        <button class="link" type="button" id="photoRemove">Remove</button></div>
       <form class="composer" id="composer">
+        <input type="file" id="photo" accept="image/*" hidden />
+        <button class="attach" id="attach" type="button" aria-label="Search with a photo of your item" title="Search with a photo">
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="15" height="11" rx="2" fill="none" stroke="#1d2433" stroke-width="1.6"/><circle cx="10" cy="10.5" r="3" fill="none" stroke="#1d2433" stroke-width="1.6"/><path d="M7 5l1.2-2h3.6L13 5" fill="none" stroke="#1d2433" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        </button>
         <label class="visually-hidden" for="input">Describe what you lost</label>
         <textarea id="input" rows="1" placeholder="What did you lose, and when?" maxlength="1000"></textarea>
         <button class="send" id="send" type="submit" aria-label="Send" disabled>
           <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h12M10 4l6 6-6 6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </form>
-      <p class="hint">Times are in {{ timezone }}. Answers come only from the footage on file.</p>
+      <p class="hint">Times are in {{ timezone }}. Answers come only from the footage on file. Photos are used for the search and not kept.</p>
     </div>
   </section>
 
@@ -375,8 +390,30 @@ function playFrom(video, seconds) {
   video.play().catch(() => {});
 }
 
+let pendingPhoto = null;
+const photoInput = $('photo');
+$('attach').addEventListener('click', () => photoInput.click());
+photoInput.addEventListener('change', () => {
+  const f = photoInput.files[0];
+  if (!f) return;
+  if (!f.type.startsWith('image/')) { addBot('<div class="error">That file isn\'t a photo. Choose a JPEG or PNG.</div>'); return; }
+  if (f.size > 8 * 1024 * 1024) { addBot('<div class="error">That photo is larger than 8 MB. Choose a smaller one.</div>'); return; }
+  pendingPhoto = f;
+  $('photoPreview').src = URL.createObjectURL(f);
+  $('photoName').textContent = 'Photo ready. Add a note (for example when you lost it) and press send.';
+  $('photoChip').classList.add('show');
+  sendBtn.disabled = busy;
+  input.focus();
+});
+$('photoRemove').addEventListener('click', clearPhoto);
+function clearPhoto() {
+  pendingPhoto = null; photoInput.value = '';
+  $('photoChip').classList.remove('show');
+  sendBtn.disabled = busy || !input.value.trim();
+}
+
 function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; }
-input.addEventListener('input', () => { autosize(); sendBtn.disabled = busy || !input.value.trim(); });
+input.addEventListener('input', () => { autosize(); sendBtn.disabled = busy || (!input.value.trim() && !pendingPhoto); });
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); }
 });
@@ -384,20 +421,37 @@ $('composer').addEventListener('submit', e => { e.preventDefault(); send(input.v
 
 async function send(raw) {
   const text = String(raw || '').trim();
-  if (!text || busy) return;
+  const photo = pendingPhoto;
+  if ((!text && !photo) || busy) return;
   busy = true; sendBtn.disabled = true;
   input.value = ''; autosize();
-  addUser(text);
+  if (photo) {
+    const el = document.createElement('div');
+    el.className = 'msg user';
+    el.innerHTML = `<div class="bubble-user"><img alt="Your photo" src="${URL.createObjectURL(photo)}" />${esc(text || 'Can you find this?')}</div>`;
+    thread.appendChild(el); scrollDown();
+    clearPhoto();
+  } else {
+    addUser(text);
+  }
   const holder = addBot('<div class="typing" role="status" aria-label="Searching"><span></span><span></span><span></span></div>');
   try {
-    const res = await fetch('/api/chat', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text})});
+    let res;
+    if (photo) {
+      const form = new FormData();
+      form.append('photo', photo);
+      form.append('message', text);
+      res = await fetch('/api/chat/photo', {method: 'POST', body: form});
+    } else {
+      res = await fetch('/api/chat', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text})});
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || `The server answered ${res.status}.`);
     holder.innerHTML = data.conversation ? renderConversation(data.conversation) : renderAnswer(data.answer);
   } catch (err) {
     holder.innerHTML = `<div class="error">The search didn't run: ${esc(err.message)} Try again in a moment.</div>`;
   } finally {
-    busy = false; sendBtn.disabled = !input.value.trim(); scrollDown(); input.focus();
+    busy = false; sendBtn.disabled = !input.value.trim() && !pendingPhoto; scrollDown(); input.focus();
   }
 }
 
@@ -461,11 +515,12 @@ function evidenceCard(m) {
   } else {
     media = '<div class="no-video">The video for this moment is no longer available.</div>';
   }
-  return `<div class="evidence">${media}<div class="evidence-body">
+  return `<div class="evidence">${media}<div class="evidence-body"><div class="evidence-head">
+    ${m.crop_url ? `<img class="crop" src="${esc(m.crop_url)}" alt="What the camera saw" />` : ''}<div>
     <div class="item-line">${swatch(m.colour)}<span class="item-name">${esc(itemName(m))}</span>
       <span class="pill ${esc(m.state)}">${esc(STATE[m.state] || m.state)}</span>
       <span class="muted">at ${esc(m.local_time)}</span></div>
-    <p>${esc(shortPlace(m.location_label))}</p>
+    <p>${esc(shortPlace(m.location_label))}</p></div></div>
     ${m.caption ? `<p>${esc(m.caption)}</p>` : ''}
     ${playerId ? `<div class="actions"><button class="btn" type="button" data-replay="${playerId}" data-t="${Number(m.seek_to_s) || 0}">${ICON_PLAY} Play from this moment</button></div>` : ''}
   </div></div>`;
@@ -473,7 +528,7 @@ function evidenceCard(m) {
 
 function rowHtml(m) {
   return `<div class="row"><div class="row-head">
-    <span class="row-time">${esc(m.local_time)}</span>${swatch(m.colour)}
+    <span class="row-time">${esc(m.local_time)}</span>${m.crop_url ? `<img class="crop" src="${esc(m.crop_url)}" alt="" />` : swatch(m.colour)}
     <span>${esc(itemName(m))}</span><span class="pill ${esc(m.state)}">${esc(STATE[m.state] || m.state)}</span>
     ${m.media_url ? `<button class="btn ghost" type="button" data-watch="1" data-url="${esc(m.media_url)}" data-t="${Number(m.seek_to_s) || 0}" data-stamp="${esc(stampFor(m))}" aria-expanded="false">${ICON_PLAY} Watch</button>` : ''}
   </div><div class="muted" style="margin-top:4px">${esc(shortPlace(m.location_label))}</div></div>`;
