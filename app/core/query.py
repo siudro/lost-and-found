@@ -50,6 +50,23 @@ CANONICAL_ITEMS = {
     "phone",
 }
 
+# What each canonical query term should match among the item types the
+# captioner can store (the contract keeps jacket, coat and hoodie distinct).
+ITEM_FAMILIES: dict[str, tuple[str, ...]] = {
+    "jacket": ("jacket", "coat", "hoodie", "sweater"),
+    "backpack": ("backpack", "bag"),
+}
+
+
+def expand_item_family(terms) -> list[str]:
+    out: list[str] = []
+    for term in terms:
+        for member in ITEM_FAMILIES.get(term, (term,)):
+            if member not in out:
+                out.append(member)
+    return out
+
+
 COLOUR_SYNONYMS: dict[str, str] = {
     "grey": "gray",
     "charcoal": "gray",

@@ -19,7 +19,7 @@ from .answer import (
     handover_state,
     local_clock,
 )
-from .query import ParsedQuery, looks_like_scene_question, parse
+from .query import ParsedQuery, expand_item_family, looks_like_scene_question, parse
 from .store import Store
 from .timeutil import DEFAULT_TIMEZONE, DateRange, iso_utc, parse_timestamp, venue_zone
 
@@ -46,9 +46,11 @@ class ChatService:
         timezone_name: str = DEFAULT_TIMEZONE,
         now_provider=None,
         media_url_for=None,
+        crop_url_for=None,
     ) -> None:
         self.store = store
         self.media_url_for = media_url_for
+        self.crop_url_for = crop_url_for
         self.timezone_name = timezone_name
         self._now = now_provider or (lambda: datetime.now(timezone.utc))
 
@@ -77,7 +79,7 @@ class ChatService:
         rows = self.store.search_events(
             start=parsed.date_range.start_utc,
             end=parsed.date_range.end_utc,
-            item_terms=parsed.item_terms,
+            item_terms=expand_item_family(parsed.item_terms),
             colours=parsed.colours,
         )
 
@@ -271,8 +273,12 @@ class ChatService:
                 score += 0.2
             elif row.state_at_event == "possibly_unattended":
                 score += 0.1
-            if parsed.item_terms and attrs.get("item_type") in parsed.item_terms:
+            if parsed.item_terms and attrs.get("item_type") in expand_item_family(parsed.item_terms):
                 score += 0.15
+            if parsed.features and set(parsed.features) & {
+                f.replace("_", " ") for f in attrs.get("visible_features") or []
+            }:
+                score += 0.1
             if row.onset_certainty == "observed":
                 score += 0.1
             if available:
@@ -296,11 +302,12 @@ class ChatService:
             seek = evidence.get("seek_to_offset_s") if evidence else None
             media = self._media_for(row.source_id) if available else None
             caption = observation.get("caption_text")
-            scored.append((score, row, local, note, available, attrs, media, seek, caption))
+            crop = self.crop_url_for(row.observation_id) if self.crop_url_for else None
+            scored.append((score, row, local, note, available, attrs, media, seek, caption, crop))
 
         scored.sort(key=lambda item: (-item[0], item[2]))
         matches: list[Match] = []
-        for rank, (score, row, local, note, available, attrs, media, seek, caption) in enumerate(scored, start=1):
+        for rank, (score, row, local, note, available, attrs, media, seek, caption, crop) in enumerate(scored, start=1):
             if score <= 0:
                 continue
             matches.append(Match(
@@ -322,5 +329,6 @@ class ChatService:
                 media_url=media,
                 seek_to_s=seek if seek is not None else row.event_offset_s,
                 caption=caption,
+                crop_url=crop,
             ))
         return matches

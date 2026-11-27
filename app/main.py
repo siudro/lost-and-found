@@ -27,7 +27,11 @@ from starlette.requests import Request
 
 from .ai.providers import PROVIDERS
 from .core.chat import ChatService
+from .ai.captioner import apply as apply_description
+from .ai.captioner import describe_items
 from .ai.llm import LLMClient
+from .ai.photo import MAX_PHOTO_BYTES, PhotoError, describe_photo, search_text
+from .ai.photo import decode as decode_photo
 from .core.conversation import small_talk
 from .core.detector import DetectorConfig
 from .core.diagnostics import provider_summary, run_checks
@@ -158,6 +162,28 @@ LLM = LLMClient.from_env()
 SOURCE_ID = re.compile(r"^src_[a-z0-9_]+$")
 
 
+def crops_dir() -> Path:
+    return media_dir() / "crops"
+
+
+OBS_ID = re.compile(r"^obs_[a-z0-9_]+$")
+
+
+def crop_url_for(observation_id: str) -> str | None:
+    if OBS_ID.match(observation_id) and (crops_dir() / f"{observation_id}.jpg").exists():
+        return f"/media/crops/{observation_id}.jpg"
+    return None
+
+
+@app.get("/media/crops/{name}")
+def crop_image(name: str):
+    observation_id = name.removesuffix(".jpg")
+    path = crops_dir() / f"{observation_id}.jpg"
+    if not name.endswith(".jpg") or not OBS_ID.match(observation_id) or not path.exists():
+        raise HTTPException(status_code=404, detail="no picture for that item")
+    return FileResponse(path, media_type="image/jpeg")
+
+
 def media_url_for(source_id: str) -> str | None:
     if SOURCE_ID.match(source_id) and (media_dir() / f"{source_id}.mp4").exists():
         return f"/media/{source_id}.mp4"
@@ -219,7 +245,7 @@ def chat(payload: dict):
         reply = small_talk(text, suggestions)
         if reply is not None:
             return {"conversation": reply.to_dict()}
-        service = ChatService(store, media_url_for=media_url_for)
+        service = ChatService(store, media_url_for=media_url_for, crop_url_for=crop_url_for)
         result = service.ask(text)
         payload = result.to_dict()
         if not looks_like_search(text, payload.get("query") or {}):
@@ -241,6 +267,40 @@ def chat(payload: dict):
         return payload
     finally:
         store.close()
+
+
+@app.post("/api/chat/photo")
+def chat_photo(photo: UploadFile = File(...), message: str = Form("")):
+    """Search with a photo of the lost item. The photo is never stored."""
+    data = photo.file.read(MAX_PHOTO_BYTES + 1)
+    try:
+        image = decode_photo(data)
+    except PhotoError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        del data
+    seen = describe_photo(LLM, image)
+    del image
+    text = search_text(message[:500], seen["description"])
+    store = get_store()
+    try:
+        service = ChatService(store, media_url_for=media_url_for, crop_url_for=crop_url_for)
+        payload = service.ask(text).to_dict()
+    finally:
+        store.close()
+    answer = payload["answer"]
+    if seen["source"] == "ai":
+        intro = f"From your photo I can see a {seen['phrase']}."
+    else:
+        intro = (f"Without the AI connection I can only use your photo's main colour ({seen['phrase']}), "
+                 "so matches are by colour alone.")
+    answer["lead"] = f"{intro} {answer.get('lead') or answer['body']} Any match is a possible match only: compare the clip with your photo."
+    answer["photo"] = {"described_by": seen["source"], "description": seen["phrase"]}
+    phrased = LLM.phrase_answer(f"[photo of: {seen['phrase']}] {message[:300]}", answer)
+    answer["phrased_by"] = "llm" if phrased else "template"
+    if phrased:
+        answer["lead"] = phrased
+    return payload
 
 
 SEARCH_WORDS = re.compile(
@@ -366,7 +426,20 @@ def ingest_file(
         log(line)
 
     log(f"looking for items left behind in {duration:.0f} s of video")
-    results = run_pipeline(source, progress=progress, detector_config=detector_config)
+    views: list = []
+    results = run_pipeline(source, progress=progress, detector_config=detector_config, views=views)
+    if views:
+        log("describing what was found" if LLM.enabled else "saving a picture of each item found")
+        descriptions = describe_items(LLM, media_path, views, crops_dir(), log=progress)
+        for result in results:
+            for obs in result.observations:
+                desc = descriptions.get(obs["observation_id"])
+                if desc and not obs.get("_described"):
+                    apply_description(obs, desc, LLM.model)
+                    obs["_described"] = True
+        for result in results:
+            for obs in result.observations:
+                obs.pop("_described", None)
     log("preparing the video for playback")
     playback = make_playback_copy(media_path, media_dir() / f"{source_id}.mp4")
     source.playback_path = str(playback)
@@ -401,6 +474,7 @@ def footage_summary(store: Store, source: dict) -> dict:
             "item_type": obs["attributes"].get("item_type"),
             "location": obs["attributes"].get("location_label"),
             "caption": obs.get("caption_text"),
+            "crop_url": crop_url_for(obs["observation_id"]),
             "events": [
                 {
                     "type": e["event_type"],
@@ -648,10 +722,14 @@ def delete_footage(source_id: str):
         raise HTTPException(status_code=400, detail="that footage cannot be deleted here")
     store = get_store()
     try:
+        observation_ids = [o["observation_id"] for o in store.observations_for_source(source_id)]
         removed = store.delete_source(source_id)
     finally:
         store.close()
     (media_dir() / f"{source_id}.mp4").unlink(missing_ok=True)
+    for observation_id in observation_ids:
+        if OBS_ID.match(observation_id):
+            (crops_dir() / f"{observation_id}.jpg").unlink(missing_ok=True)
     if not removed:
         raise HTTPException(status_code=404, detail="no such footage")
     return {"deleted": source_id, "records_removed": removed}

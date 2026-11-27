@@ -44,6 +44,7 @@ class Match:
     media_url: str | None = None
     seek_to_s: float | None = None
     caption: str | None = None
+    crop_url: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -66,6 +67,7 @@ class Match:
             "media_url": self.media_url,
             "seek_to_s": self.seek_to_s,
             "caption": self.caption,
+            "crop_url": self.crop_url,
         }
 
 
