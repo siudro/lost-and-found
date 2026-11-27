@@ -71,7 +71,8 @@ def clean(desc: dict | None) -> dict | None:
 def phrase(desc: dict) -> str:
     """'gray hoodie with a hood and a zipper'"""
     colour = " and ".join(c for c in (desc.get("primary_color"), desc.get("secondary_color")) if c)
-    item = desc.get("item_type") or "item"
+    item = desc.get("item_type")
+    item = "item" if item in (None, "other") else item
     feats = [f.replace("_", " ") for f in desc.get("visible_features") or []]
     text = f"{colour} {item}".strip()
     if feats:

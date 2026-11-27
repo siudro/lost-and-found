@@ -79,6 +79,8 @@ def test_clean_drops_values_outside_the_schema():
 
 def test_phrase_reads_naturally():
     assert captioner.phrase(GOOD) == "gray hoodie with a hood, a zipper"
+    other = dict(GOOD, item_type="other", primary_color="brown", secondary_color="green", visible_features=["pattern"])
+    assert captioner.phrase(other) == "brown and green item with a pattern"
 
 
 def test_vision_call_is_small_and_structured():
