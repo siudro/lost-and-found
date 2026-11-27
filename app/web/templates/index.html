@@ -416,8 +416,8 @@ function capital(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 function itemName(m) { return `${m.colour ? capital(m.colour) + ' ' : ''}${m.item_type || 'item'}`; }
 function shortPlace(label) {
   if (!label) return 'Location not recorded';
-  return label.replace(/\s*\(CAVIAR sample: ([^()]*)(\([^)]*\))?\)\s*$/, ' (sample: $1)')
-              .replace(/^CAVIAR sample: ([^()]*)(\([^)]*\))?\s*$/, 'Sample: $1').replace(/\s+/g, ' ').trim();
+  return label.replace(/\s*\(CAVIAR sample: ([^()]*)(\([^)]*\))?\)\s*$/, (_, t) => ` (sample: ${t.trim()})`)
+              .replace(/^CAVIAR sample: ([^()]*)(\([^)]*\))?\s*$/, (_, t) => `Sample: ${t.trim()}`).replace(/\s+/g, ' ').trim();
 }
 function stampFor(m) { return `${m.local_time}  ${STATE[m.state] || ''}`.trim(); }
 
