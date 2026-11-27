@@ -558,11 +558,12 @@ def run_pipeline(
             continue
         reports.append(report)
         if views is not None:
-            # The clearest look at the item: nobody near it, preferably late.
-            best = max(
-                track.points,
-                key=lambda p: (p.person_distance_ratio is None, p.person_distance_ratio or 0.0, p.offset_s),
-            )
+            # The clearest look at the item: nobody near it, from the middle of
+            # that quiet spell (its ends are where someone arrives or leaves).
+            clear = [p for p in track.points if p.person_distance_ratio is None] or sorted(
+                track.points, key=lambda p: p.person_distance_ratio or 0.0)[-max(1, len(track.points) // 3):]
+            clear.sort(key=lambda p: p.offset_s)
+            best = clear[len(clear) // 2]
             from ..ai.captioner import ItemView
 
             views.append(ItemView(report.observation["observation_id"], best.offset_s, best.bbox,
