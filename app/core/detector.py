@@ -566,11 +566,17 @@ def detect_left_items(
         item_mask = (static_age >= config.static_seconds).astype(np.uint8)
         item_mask = cv2.morphologyEx(item_mask, cv2.MORPH_CLOSE, kernel_close)
         item_mask = cv2.morphologyEx(item_mask, cv2.MORPH_OPEN, kernel_open)
-        item_boxes = _boxes(
-            item_mask,
-            int(config.min_area_ratio * frame_area),
-            int(config.max_area_ratio * frame_area),
-        )
+        item_boxes = [
+            b for b in _boxes(
+                item_mask,
+                int(config.min_area_ratio * frame_area),
+                int(config.max_area_ratio * frame_area),
+            )
+            # A thin sliver cut off by the edge of the picture is something
+            # mostly out of view; it cannot be judged, so it is not reported.
+            if not ((b[0] == 0 or b[1] == 0 or b[0] + b[2] >= width or b[1] + b[3] >= height)
+                    and min(b[2], b[3]) < 12)
+        ]
 
         mover_mask = cv2.morphologyEx(moving.astype(np.uint8), cv2.MORPH_OPEN, kernel_open)
         mover_mask = cv2.dilate(mover_mask, kernel_close)
