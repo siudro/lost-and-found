@@ -262,3 +262,14 @@ def test_docker_image_includes_every_folder_the_app_reads():
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
     for folder in ("app", "schemas", "fixtures", "tools", "prompts"):
         assert f"COPY {folder} ./{folder}" in dockerfile, folder
+
+
+def test_crop_is_saved_even_when_the_seek_lands_past_the_end(tmp_path):
+    clip = tmp_path / "c.mp4"
+    writer = cv2.VideoWriter(str(clip), cv2.VideoWriter_fourcc(*"mp4v"), 5, (160, 120))
+    for _ in range(10):  # 2 seconds
+        writer.write(solid((60, 60, 60)))
+    writer.release()
+    view = captioner.ItemView("obs_end", 2.4, (40, 30, 30, 30), (160, 120))
+    captioner.describe_items(LLMClient(api_key=None), clip, [view], tmp_path / "crops")
+    assert (tmp_path / "crops" / "obs_end.jpg").exists()
