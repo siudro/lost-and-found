@@ -253,3 +253,12 @@ def test_key_check_outcomes_never_echo_the_key():
     assert [ok for ok, _ in results] == [True, False, False, False]
     assert "401" in results[1][1] and "429" in results[2][1] and "network" in results[3][1]
     assert all(FAKE_KEY not in detail for _, detail in results)
+
+
+def test_docker_image_includes_every_folder_the_app_reads():
+    """The prompts folder once missed the image: the chat broke in production only."""
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    for folder in ("app", "schemas", "fixtures", "tools", "prompts"):
+        assert f"COPY {folder} ./{folder}" in dockerfile, folder
