@@ -175,6 +175,27 @@ def check_storage(report: Report) -> None:
         report.add(Check("storage", False, f"unusable ({display_path(path)}): {error}", fatal=True))
 
 
+def check_disk(report: Report) -> None:
+    """Free space where playback copies live (the volume) and where raw
+    uploads wait (scratch). A full volume makes uploads fail."""
+    import shutil
+    import tempfile
+
+    volume = Path(os.environ.get("DATABASE_PATH", str(ROOT / "data" / "foundit.db"))).parent
+    scratch = Path(os.environ.get("UPLOAD_TMP_DIR", tempfile.gettempdir()))
+    parts, low = [], False
+    for name, path in (("volume", volume), ("scratch", scratch)):
+        try:
+            usage = shutil.disk_usage(path)
+        except OSError:
+            parts.append(f"{name}: unknown")
+            continue
+        free_mb = usage.free // (1024 * 1024)
+        parts.append(f"{name}: {free_mb} MB free of {usage.total // (1024 * 1024)} MB")
+        low = low or free_mb < 100
+    report.add(Check("disk", not low, "; ".join(parts)))
+
+
 def check_fixtures(report: Report) -> None:
     fixture_dir = ROOT / "fixtures"
     required = [
@@ -272,6 +293,7 @@ def run_checks() -> Report:
     check_media_decoding(report)
     check_schemas(report)
     check_storage(report)
+    check_disk(report)
     check_fixtures(report)
     check_jinja(report)
     check_providers(report)
