@@ -37,7 +37,15 @@ from .ai.photo import decode as decode_photo
 from .core.conversation import small_talk
 from .core.detector import DetectorConfig
 from .core.diagnostics import provider_summary, run_checks
-from .core.pipeline import IngestError, SourceSpec, make_playback_copy, probe_duration, run_pipeline
+from .core.pipeline import (
+    IngestError,
+    SourceSpec,
+    make_playback_copy,
+    probe_creation_time,
+    probe_duration,
+    probe_width,
+    run_pipeline,
+)
 from .core.store import Store
 from .core.timeutil import iso_utc, parse_timestamp
 
@@ -438,6 +446,14 @@ def ingest_file(
     if recorded_at is None:
         # Replayed sample footage: placed so that it ends now.
         recorded_at = datetime.now(timezone.utc) - timedelta(seconds=duration)
+    # Make the small browser copy first. For a large phone video, analyse
+    # that copy: decoding 1080p or 4K is slow, the detector works at 480 px
+    # anyway, and the copy is upright (the phone's rotation is applied).
+    # Small footage (CAVIAR, 384 px) is analysed from the original pixels.
+    log("preparing the video")
+    playback = make_playback_copy(media_path, media_dir() / f"{source_id}.mp4")
+    if probe_width(media_path) > 960:
+        media_path = playback
     source = SourceSpec(
         source_id=source_id,
         camera_id=camera_id,
@@ -471,8 +487,6 @@ def ingest_file(
         for result in results:
             for obs in result.observations:
                 obs.pop("_described", None)
-    log("preparing the video for playback")
-    playback = make_playback_copy(media_path, media_dir() / f"{source_id}.mp4")
     source.playback_path = str(playback)
 
     store = get_store()
@@ -531,61 +545,61 @@ def footage_summary(store: Store, source: dict) -> dict:
     }
 
 
-@app.post("/api/ingest")
-def ingest(
-    file: UploadFile = File(...),
-    camera_id: str = Form("cam_upload_1"),
-    location_label: str = Form(""),
-    recorded_at: str = Form(...),
-    visibility: str = Form("approved_private"),
-    kind: str = Form("recorded_upload"),
-):
-    """Upload a clip: decode it, find items that were left, keep a playback copy.
+def _resolve_recording_time(path: Path, recorded_at: str | None, file_modified_ms: str | None):
+    """When the recording started, and where that time came from.
 
-    Live cameras and replays use this same path: tools/live_ingest.py cuts
-    the stream into segments and posts each one with kind=live_feed (or
-    replay), so everything downstream behaves identically.
+    In order: what the person typed, what the video file says, the file's
+    date from their phone minus the video's length, then now minus length.
     """
+    if recorded_at:
+        try:
+            return parse_timestamp(recorded_at), "entered"
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=f"recorded_at: {error}") from error
+    from_file = probe_creation_time(path)
+    if from_file is not None:
+        return from_file, "video file"
     try:
-        started = parse_timestamp(recorded_at)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=f"recorded_at: {error}") from error
+        duration = probe_duration(path)
+    except IngestError:
+        duration = 0.0
+    if file_modified_ms:
+        try:
+            end = datetime.fromtimestamp(int(file_modified_ms) / 1000, tz=timezone.utc)
+            return end - timedelta(seconds=duration), "file date"
+        except (ValueError, OverflowError, OSError):
+            pass
+    return datetime.now(timezone.utc) - timedelta(seconds=duration), "upload time"
+
+
+TIME_NOTE = {
+    "entered": "recording time as entered",
+    "video file": "recording time read from the video file",
+    "file date": "recording time taken from the file's date",
+    "upload time": "the video had no recording time, so the upload time was used",
+}
+
+
+def _start_ingest(target: Path, filename: str, *, camera_id: str, location_label: str,
+                  recorded_at: str | None, file_modified_ms: str | None, visibility: str, kind: str) -> dict:
     if visibility not in {"public_demo", "approved_private", "internal_only"}:
+        target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="unknown visibility")
     if kind not in INGEST_KINDS:
+        target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="kind must be recorded_upload, live_feed or replay")
+    try:
+        started, time_source = _resolve_recording_time(target, recorded_at, file_modified_ms)
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
     # A live segment is stamped when it was read, so its clock is the
     # ingestion clock (absolute but a little late), not the camera's.
     clock = "ingestion_clock" if kind == "live_feed" else "source_clock"
-
-    source_id = _new_source_id(INGEST_KINDS[kind])
-    suffix = Path(file.filename or "clip.mp4").suffix.lower()[:8] or ".mp4"
-    # The raw phone video can be hundreds of MB. It goes to the container's
-    # scratch disk, not the small persistent volume; only the compressed
-    # playback copy is kept.
-    uploads = incoming_dir()
-    uploads.mkdir(parents=True, exist_ok=True)
-    target = uploads / f"{source_id}{suffix}"
-    size = 0
-    try:
-        with target.open("wb") as handle:
-            while chunk := file.file.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="video is larger than the upload limit")
-                handle.write(chunk)
-        if size == 0:
-            raise HTTPException(status_code=400, detail="the uploaded file is empty")
-    except OSError as error:
-        target.unlink(missing_ok=True)
-        if error.errno == errno.ENOSPC:
-            raise HTTPException(status_code=507, detail=NO_ROOM) from error
-        raise
-    except BaseException:
-        target.unlink(missing_ok=True)
-        raise
+    source_id = target.stem
 
     def work(log):
+        log(TIME_NOTE[time_source])
         try:
             return ingest_file(
                 target,
@@ -601,7 +615,137 @@ def ingest(
         finally:
             target.unlink(missing_ok=True)
 
-    return start_job(file.filename or "uploaded video", work)
+    return start_job(filename or "uploaded video", work)
+
+
+def _save_stream(read, target: Path) -> int:
+    """Write chunks from ``read`` to ``target``; clear errors, no half files."""
+    size = 0
+    try:
+        with target.open("ab") as handle:
+            while chunk := read(1024 * 1024):
+                size += len(chunk)
+                if target.stat().st_size + len(chunk) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail=TOO_BIG)
+                handle.write(chunk)
+    except OSError as error:
+        target.unlink(missing_ok=True)
+        if error.errno == errno.ENOSPC:
+            raise HTTPException(status_code=507, detail=NO_ROOM) from error
+        raise
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    return size
+
+
+@app.post("/api/ingest")
+def ingest(
+    file: UploadFile = File(...),
+    camera_id: str = Form("cam_upload_1"),
+    location_label: str = Form(""),
+    recorded_at: str | None = Form(None),
+    file_modified_ms: str | None = Form(None),
+    visibility: str = Form("approved_private"),
+    kind: str = Form("recorded_upload"),
+):
+    """Upload a clip in one request (small files, tools, live segments).
+
+    Live cameras and replays use this same path: tools/live_ingest.py cuts
+    the stream into segments and posts each one with kind=live_feed (or
+    replay), so everything downstream behaves identically. The web page
+    uses the chunked upload below, which survives slow phone connections.
+    """
+    if kind not in INGEST_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be recorded_upload, live_feed or replay")
+    # The raw video can be hundreds of MB. It waits on the container's
+    # scratch disk, not the small persistent volume; only the compressed
+    # playback copy is kept.
+    uploads = incoming_dir()
+    uploads.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file.filename or "clip.mp4").suffix.lower()[:8] or ".mp4"
+    target = uploads / f"{_new_source_id(INGEST_KINDS[kind])}{suffix}"
+    if _save_stream(file.file.read, target) == 0:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="the uploaded file is empty")
+    return _start_ingest(target, file.filename or "uploaded video", camera_id=camera_id,
+                         location_label=location_label, recorded_at=recorded_at,
+                         file_modified_ms=file_modified_ms, visibility=visibility, kind=kind)
+
+
+# Chunked upload: a phone sends the video in small pieces, each its own
+# short request, so a slow connection never hits a proxy timeout and the
+# page can show real progress. A failed piece is simply sent again.
+UPLOAD_ID = re.compile(r"^src_upload_\d{14}_[0-9a-f]{4}$")
+CHUNK_LIMIT = 16 * 1024 * 1024
+UPLOADS: dict[str, Path] = {}
+TOO_BIG = "This video is larger than the upload limit. Try a shorter clip, or set the phone camera to 1080p."
+
+
+@app.post("/api/uploads")
+def upload_start(filename: str = Form("clip.mp4"), size: int = Form(0)):
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=TOO_BIG)
+    uploads = incoming_dir()
+    uploads.mkdir(parents=True, exist_ok=True)
+    suffix = Path(filename).suffix.lower()[:8] or ".mp4"
+    if not re.fullmatch(r"\.[a-z0-9]{1,7}", suffix):
+        suffix = ".mp4"
+    upload_id = _new_source_id("upload")
+    target = uploads / f"{upload_id}{suffix}"
+    target.write_bytes(b"")
+    UPLOADS[upload_id] = target
+    return {"upload_id": upload_id, "chunk_bytes": 8 * 1024 * 1024}
+
+
+def _upload_target(upload_id: str) -> Path:
+    target = UPLOADS.get(upload_id) if UPLOAD_ID.match(upload_id) else None
+    if target is None or not target.exists():
+        raise HTTPException(status_code=404, detail="This upload has expired. Choose the video and upload it again.")
+    return target
+
+
+@app.put("/api/uploads/{upload_id}")
+async def upload_chunk(upload_id: str, request: Request, offset: int = 0):
+    target = _upload_target(upload_id)
+    have = target.stat().st_size
+    body = await request.body()
+    if len(body) > CHUNK_LIMIT:
+        raise HTTPException(status_code=413, detail="piece too large")
+    if offset + len(body) <= have:
+        return {"received": have}  # a retry of a piece we already have
+    if offset != have:
+        raise HTTPException(status_code=409, detail=f"expected offset {have}")
+    if have + len(body) > MAX_UPLOAD_BYTES:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail=TOO_BIG)
+    try:
+        with target.open("ab") as handle:
+            handle.write(body)
+    except OSError as error:
+        target.unlink(missing_ok=True)
+        if error.errno == errno.ENOSPC:
+            raise HTTPException(status_code=507, detail=NO_ROOM) from error
+        raise
+    return {"received": have + len(body)}
+
+
+@app.post("/api/uploads/{upload_id}/finish")
+def upload_finish(
+    upload_id: str,
+    filename: str = Form("uploaded video"),
+    location_label: str = Form(""),
+    recorded_at: str | None = Form(None),
+    file_modified_ms: str | None = Form(None),
+):
+    target = _upload_target(upload_id)
+    UPLOADS.pop(upload_id, None)
+    if target.stat().st_size == 0:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="the uploaded file is empty")
+    return _start_ingest(target, filename, camera_id="cam_upload_1", location_label=location_label,
+                         recorded_at=recorded_at or None, file_modified_ms=file_modified_ms,
+                         visibility="approved_private", kind="recorded_upload")
 
 
 # Real footage that may be shown publicly: CAVIAR, Creative Commons BY-SA.

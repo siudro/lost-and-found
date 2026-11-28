@@ -18,6 +18,7 @@ The three timestamps stay separate, as the contract requires:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -125,6 +126,70 @@ def probe_duration(path: str | Path) -> float:
         raise IngestError(f"could not read the duration of {Path(path).name}") from error
 
 
+def probe_fps(path: str | Path) -> float:
+    """Average frames per second of the first video stream, 0 if unknown."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        num, _, den = result.stdout.strip().partition("/")
+        return float(num) / float(den or 1) if float(den or 1) else 0.0
+    except (OSError, ValueError, subprocess.SubprocessError, ZeroDivisionError):
+        return 0.0
+
+
+def probe_width(path: str | Path) -> int:
+    """Displayed width in pixels (after rotation), 0 if unknown."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height:stream_side_data=rotation:stream_tags=rotate", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        stream = (json.loads(result.stdout or "{}").get("streams") or [{}])[0]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+    width, height = int(stream.get("width") or 0), int(stream.get("height") or 0)
+    rotation = str(stream.get("tags", {}).get("rotate", ""))
+    for side in stream.get("side_data_list", []) or []:
+        rotation = str(side.get("rotation", rotation))
+    return height if rotation.lstrip("-") in ("90", "270") else width
+
+
+def probe_creation_time(path: str | Path) -> datetime | None:
+    """When the camera says the recording was made, if the file says so.
+
+    iPhones write com.apple.quicktime.creationdate (local time with its
+    offset); most phones write creation_time in UTC. None when absent or
+    unreadable: the caller then decides, it is never guessed here.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        tags = json.loads(result.stdout or "{}").get("format", {}).get("tags", {})
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    lowered = {k.lower(): v for k, v in tags.items()}
+    for key in ("com.apple.quicktime.creationdate", "creation_time"):
+        value = lowered.get(key)
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            continue
+        if parsed.year < 2000:
+            continue
+        return parsed.astimezone(timezone.utc)
+    return None
+
+
 def make_playback_copy(source: str | Path, target: str | Path) -> Path:
     """Re-encode to H.264 MP4 that every browser can play and seek.
 
@@ -132,10 +197,14 @@ def make_playback_copy(source: str | Path, target: str | Path) -> Path:
     """
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Phones record 30 or 60 frames a second; 15 is plenty for a fixed
+    # camera, and encodes about a third faster into a smaller file.
+    scale = "scale='min(960,iw)':-2"
+    video_filter = f"fps=15,{scale}" if probe_fps(source) > 15.5 else scale
     result = subprocess.run(
         [
             "ffmpeg", "-v", "error", "-y", "-i", str(source), "-an",
-            "-vf", "scale='min(960,iw)':-2", "-c:v", "libx264", "-preset", "veryfast",
+            "-vf", video_filter, "-c:v", "libx264", "-preset", "veryfast",
             "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(target),
         ],
         capture_output=True, text=True, timeout=1800,
