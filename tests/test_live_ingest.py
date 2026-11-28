@@ -111,3 +111,51 @@ def test_live_segment_is_stored_as_a_live_feed_on_the_ingestion_clock(client, tm
     footage = {f["source_id"]: f for f in client.get("/api/footage").json()["footage"]}
     assert source_id in footage
     assert len(job["result"]["items"]) == 1
+
+
+def test_raw_uploads_wait_on_scratch_disk_not_the_volume(client, tmp_path, monkeypatch):
+    import app.main as main_module
+
+    scratch = tmp_path / "scratch"
+    monkeypatch.setenv("UPLOAD_TMP_DIR", str(scratch))
+    assert main_module.incoming_dir() == scratch / "foundit_incoming"
+    assert main_module.media_dir() not in main_module.incoming_dir().parents
+
+
+def test_a_full_disk_gives_a_clear_message_not_a_500(client, monkeypatch):
+    import errno
+
+    import app.main as main_module
+
+    class FullPath:
+        def __init__(self, *a):
+            pass
+
+        def mkdir(self, **k):
+            pass
+
+        def __truediv__(self, other):
+            return self
+
+        def open(self, *a, **k):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        def unlink(self, missing_ok=False):
+            pass
+
+    monkeypatch.setattr(main_module, "incoming_dir", lambda: FullPath())
+    r = client.post("/api/ingest", files={"file": ("a.mp4", b"x" * 10, "video/mp4")},
+                    data={"recorded_at": "2026-11-20T06:00:00Z"})
+    assert r.status_code == 507
+    assert "ran out of room" in r.json()["detail"]
+
+
+def test_leftover_raw_uploads_are_cleared(client, tmp_path, monkeypatch):
+    import app.main as main_module
+
+    monkeypatch.setenv("UPLOAD_TMP_DIR", str(tmp_path / "scratch"))
+    for folder in (main_module.incoming_dir(), main_module.media_dir() / "incoming"):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "src_upload_old.mp4").write_bytes(b"x")
+    assert main_module.clear_leftover_uploads() == 2
+    assert not list(main_module.incoming_dir().iterdir())

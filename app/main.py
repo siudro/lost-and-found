@@ -7,11 +7,13 @@ so a judge can use one and an engineer can prove the other.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import secrets
 import shutil
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -151,11 +153,37 @@ def stats():
         store.close()
 
 
+NO_ROOM = (
+    "The server ran out of room for this video. Try a shorter clip, or set the "
+    "phone camera to 1080p, and upload again."
+)
+
+
+def incoming_dir() -> Path:
+    """Scratch space for raw uploads while they are processed."""
+    return Path(os.environ.get("UPLOAD_TMP_DIR", tempfile.gettempdir())) / "foundit_incoming"
+
+
 def media_dir() -> Path:
     """Playback copies live next to the database, on the persistent volume."""
     db = Path(os.environ.get("DATABASE_PATH", str(DEMO_DB)))
     return db.parent / "media"
 
+
+def clear_leftover_uploads() -> int:
+    """Raw uploads are deleted after processing, but a restart mid-job can
+    leave one behind. Older versions also kept them on the volume."""
+    removed = 0
+    for folder in (incoming_dir(), media_dir() / "incoming"):
+        if folder.is_dir():
+            for leftover in folder.iterdir():
+                if leftover.is_file():
+                    leftover.unlink(missing_ok=True)
+                    removed += 1
+    return removed
+
+
+clear_leftover_uploads()
 
 LLM = LLMClient.from_env()
 
@@ -532,7 +560,10 @@ def ingest(
 
     source_id = _new_source_id(INGEST_KINDS[kind])
     suffix = Path(file.filename or "clip.mp4").suffix.lower()[:8] or ".mp4"
-    uploads = media_dir() / "incoming"
+    # The raw phone video can be hundreds of MB. It goes to the container's
+    # scratch disk, not the small persistent volume; only the compressed
+    # playback copy is kept.
+    uploads = incoming_dir()
     uploads.mkdir(parents=True, exist_ok=True)
     target = uploads / f"{source_id}{suffix}"
     size = 0
@@ -545,6 +576,11 @@ def ingest(
                 handle.write(chunk)
         if size == 0:
             raise HTTPException(status_code=400, detail="the uploaded file is empty")
+    except OSError as error:
+        target.unlink(missing_ok=True)
+        if error.errno == errno.ENOSPC:
+            raise HTTPException(status_code=507, detail=NO_ROOM) from error
+        raise
     except BaseException:
         target.unlink(missing_ok=True)
         raise
