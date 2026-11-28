@@ -132,6 +132,9 @@
       background: var(--paper); line-height: 1.45;
     }
     .composer textarea:focus { outline: none; border-color: var(--focus); background: var(--surface); }
+    .more-time { margin: 12px 0 4px; }
+    .more-time summary { cursor: pointer; color: var(--muted); }
+    .more-time input { margin-top: 6px; }
     .attach { width: 46px; height: 46px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; flex: none; }
     .attach:hover { border-color: var(--ink); }
     .photo-chip { max-width: var(--column); margin: 0 auto 8px; display: none; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
@@ -265,14 +268,16 @@
       </div>
       <div class="fields">
         <div>
-          <label for="recorded">Recording started</label>
-          <input id="recorded" type="datetime-local" step="1" />
-        </div>
-        <div>
-          <label for="where">Camera location (optional)</label>
-          <input id="where" type="text" placeholder="Library entrance" />
+          <label for="where">Where was the camera? (optional)</label>
+          <input id="where" type="text" placeholder="Classroom 3" />
         </div>
       </div>
+      <details class="more-time">
+        <summary>Recording time: <span id="timeSummary">read from the video</span></summary>
+        <p class="muted">FoundIt reads when the video was recorded from the file, so it can answer questions like "yesterday at 4 PM". Only change it if that time is wrong.</p>
+        <label for="recorded">Recording started</label>
+        <input id="recorded" type="datetime-local" step="1" />
+      </details>
       <div class="actions">
         <button class="btn" type="button" id="upload">Upload and analyse</button>
       </div>
@@ -614,7 +619,8 @@ function localInput(date) {
   const p = n => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
 }
-$('recorded').value = localInput(new Date());
+let timeEdited = false;
+$('recorded').addEventListener('input', () => { timeEdited = true; $('timeSummary').textContent = 'set by you'; });
 function choose(file) {
   if (!file) return;
   if (!file.type.startsWith('video/') && !/\.(mp4|mov|m4v|webm|mkv|avi|mpg|mpeg)$/i.test(file.name)) {
@@ -622,7 +628,9 @@ function choose(file) {
     return;
   }
   chosen = file;
-  $('fileName').textContent = file.name;
+  timeEdited = false;
+  $('timeSummary').textContent = 'read from the video';
+  $('fileName').textContent = `${file.name} (${(file.size / 1048576).toFixed(0)} MB)`;
   $('uploadJob').innerHTML = '';
   const probe = document.createElement('video');
   probe.preload = 'metadata';
@@ -655,18 +663,50 @@ function doneMessage(el, result) {
   });
 }
 
+// Upload in 8 MB pieces: each piece is a short request, so a slow phone
+// connection never times out, and the page can show real progress.
+async function uploadInPieces(file, onProgress) {
+  const startForm = new FormData();
+  startForm.append('filename', file.name);
+  startForm.append('size', String(file.size));
+  let res = await fetch('/api/uploads', {method: 'POST', body: startForm});
+  let data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `The server answered ${res.status}.`);
+  const id = data.upload_id, piece = data.chunk_bytes || 8 * 1048576;
+  for (let offset = 0; offset < file.size; offset += piece) {
+    const part = file.slice(offset, offset + piece);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        res = await fetch(`/api/uploads/${id}?offset=${offset}`, {method: 'PUT', body: part});
+        if (res.ok) break;
+        data = await res.json().catch(() => ({}));
+        if (res.status < 500 && res.status !== 409) throw Object.assign(new Error(data.detail || `The server answered ${res.status}.`), {fatal: true});
+      } catch (err) {
+        if (err.fatal || attempt >= 5) throw err.fatal ? err : new Error('The connection dropped while uploading. Check your internet and try again.');
+      }
+      onProgress(`Connection hiccup, retrying… (${Math.round(100 * offset / file.size)}%)`);
+      await new Promise(r => setTimeout(r, 2000 * attempt));
+    }
+    onProgress(`Uploading… ${Math.min(100, Math.round(100 * (offset + part.size) / file.size))}%`);
+  }
+  return id;
+}
+
 $('upload').addEventListener('click', async () => {
   const out = $('uploadJob');
   if (!chosen) { out.innerHTML = '<div class="error">Choose a video first.</div>'; return; }
-  if (!$('recorded').value) { out.innerHTML = '<div class="error">Enter when the recording started.</div>'; return; }
-  const form = new FormData();
-  form.append('file', chosen);
-  form.append('recorded_at', new Date($('recorded').value).toISOString());
-  form.append('location_label', $('where').value);
+  if (chosen.size > 500 * 1048576) { out.innerHTML = '<div class="error">This video is larger than 500 MB. Try a shorter clip, or set the phone camera to 1080p.</div>'; return; }
   setFootageBusy(true);
-  progress(out, `Uploading ${chosen.name}…`);
+  progress(out, 'Uploading… 0%');
   try {
-    const result = await runJob(fetch('/api/ingest', {method: 'POST', body: form}), t => progress(out, t));
+    const id = await uploadInPieces(chosen, t => progress(out, t));
+    progress(out, 'Upload finished. Analysing the video…');
+    const form = new FormData();
+    form.append('filename', chosen.name);
+    form.append('location_label', $('where').value);
+    if (timeEdited && $('recorded').value) form.append('recorded_at', new Date($('recorded').value).toISOString());
+    if (chosen.lastModified) form.append('file_modified_ms', String(chosen.lastModified));
+    const result = await runJob(fetch(`/api/uploads/${id}/finish`, {method: 'POST', body: form}), t => progress(out, t));
     doneMessage(out, result);
     chosen = null; $('fileName').textContent = ''; fileInput.value = '';
     loadRecordings();
